@@ -1,0 +1,7 @@
+------------------------------------------------------------------------------
+ updt_embedded_rsc.pl - script to update all javascript and css snippets
+                        embedded into the pgcluu script and used by pgcluu.cgi.
+
+ This program is open source, licensed under the PostgreSQL Licence.
+ For license terms, see the LICENSE file.
+------------------------------------------------------------------------------

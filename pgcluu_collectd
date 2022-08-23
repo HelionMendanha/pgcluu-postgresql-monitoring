@@ -1,0 +1,3348 @@
+#!/usr/bin/env perl
+#------------------------------------------------------------------------------
+#
+# PgCluu - PostgreSQL monitoring tool with statistics collector and grapher
+#
+# This program is open source, licensed under the PostgreSQL license.
+# For license terms, see the LICENSE file.
+#
+# Author: Gilles Darold
+# Copyright: (C) 2012-2021 Gilles Darold - All rights reserved.
+#------------------------------------------------------------------------------
+use vars qw($VERSION $PROGRAM);
+use strict qw(vars subs);
+
+use File::Basename;
+use IO::File;
+use POSIX;
+use Getopt::Long qw(:config bundling no_ignore_case_always);
+use POSIX qw(locale_h sys_wait_h);
+setlocale(LC_ALL, 'C');
+
+# Change MASK to 0027 if you want to secure the data directory
+# Note that in CGI mode the www-data user or group need read
+# access to all files in the statistics directory.
+use constant UMASK => 0022;
+
+$| = 1;
+
+$VERSION = '3.3';
+$PROGRAM = 'pgcluu_collectd';
+
+$SIG{'CHLD'} = 'DEFAULT';
+
+# Default path to the external programs
+# They can be specified into command line options
+my $SAR_PROG    = 'sar';
+my $PSQL_PROG   = 'psql';
+my $CAT_PROG    = 'cat ';
+my $PIDSTAT_PROG = 'pidstat';
+
+# Global variables
+my $CONFIG_FILE     = "/etc/pgcluu.conf";
+my $SAR_FILE    = 'sar_stats.dat';
+my $PIDSTAT_FILE    = 'pidstat_stats.dat';
+my $PIDFILE     = "/var/run/postgresql/pgcluu_collectd.pid";
+my $SQL_PROBE   = '';
+my %DB_INFO     = ();
+my $HELP        = 0;
+my $DAEMONIZE   = 0;
+my $DISABLE_SAR = 0;
+my $INTERVAL    = 60; # wait 60 seconds between runs
+my $DEBUG       = 0;
+my $DBNAME      = '';
+my $DBUSER      = '';
+my $DBHOST      = '';
+my $DBPORT      = '';
+my $DBPASS      = '';
+my @METRICS     = ();
+my $LIST_METRIC = 0;
+my $FILE_REDIR  = '>>';
+my $PG_VERSION  = 0;
+my $DBSERVICE   = '';
+my $STAT_TYPE   = 'user';
+my $KILL        = 0;
+my $OS_INFO     = 0;
+my $NOTABLESPACE= 0;
+my $PGBOUNCER_ARGS = '';
+my $INCLUDED_DB = ();
+my $SKIP_HOURS  = '';
+my @SKIP_BEGIN  = ();
+my @SKIP_END    = ();
+my $USE_BUFFERCACHE = 0;
+my $NO_STATEMENTS  = 0;
+my $NO_WAITEVENT  = 0;
+my $NO_SYSINFO  = 0;
+my $SHOW_VER    = 0;
+my $END_AFTER   = 0;
+my $MAX_SIZE    = 0;
+my $END_AFTER_COUNTER = 0;
+my $NO_DATABASE = 0;
+my $D_ROTATE    = 0;
+my $H_ROTATE    = 0;
+my $RETENTION   = 0;
+my $OUT_DIR     = '.';
+my $COMPRESS    = 0;
+my $OLD_OUT_DIR = '';
+my $COLLECT_PID = 0;
+my $COMPRESS_PID = 0;
+my $GZIP_PROG   = '/bin/gzip';
+my $INCREMENTAL = 0;
+my $CAPTURE     = 0;
+my $TAR_PROG    = 'tar -czf';
+my $CAPTURE_DIR = '/tmp';
+my $DIFF_PROG   = 'diff -U 0';
+my $CRONUSER    = '';
+my $PKG_LIST_PROG  = '';
+my $DF_COMMAND  = 'LANG=C df --output="source,size,used,avail,itotal,iused,iavail,fstype,target" -x squashfs -x tmpfs -x devtmpfs';
+my $SAR_PID = 0;
+my $PIDSTAT_PID = 0;
+my $LOCK_TIMEOUT = 3;
+
+# Global storage of extensions installed in each database
+my @extensions = ();
+
+# Set the default mask for file and directory creation
+umask(UMASK);
+
+# Stores starting time
+my $START_TIME = time();
+
+# Variables related to remote ssh connection
+my $USE_SSH = '';
+my $SSH_COMMAND = '';
+my $SSH_BIN = 'ssh';
+my $SSH_IDENTITY = '';
+my $SSH_USER = '';
+my $SSH_TIMEOUT = 10;
+my $SSH_OPTIONS = "-o ConnectTimeout=$SSH_TIMEOUT -o PreferredAuthentications=hostbased,publickey";
+
+my $ALWAYS_SECURE_SEARCH_PATH_SQL = "SELECT pg_catalog.set_config('search_path', '', false);";
+
+# Variable to store previous settings
+my %ORIGINAL_PG_SETTINGS = ();
+my %ORIGINAL_DBROLE_SETTINGS = ();
+my %ORIGINAL_SYSTEM_SETTINGS = ();
+
+# Register a termination signal
+my $fini = 0;
+
+# Definition to collect metrics from the database
+my %METRICS_COMMANDS = (
+	'database_stats' => {
+		'output' => 'pg_stat_database.csv',
+		'command' => 'dump_pgstatdatabase'
+	},
+	'tablespace_size_stats' => {
+		'output' => 'pg_tablespace_size.csv',
+		'command' => 'dump_pgtablespace_size'
+	},
+	'bgwriter_stats' => {
+		'output' => 'pg_stat_bgwriter.csv',
+		'command' => 'dump_pgstatbgwriter'
+	},
+	'conflict_stats' => {
+		'output' => 'pg_stat_database_conflicts.csv',
+		'command' => 'dump_pgstatdatabaseconflicts'
+	},
+	'replication_stats' => {
+		'output' => 'pg_stat_replication.csv',
+		'command' => 'dump_pgstatreplication'
+	},
+	'all_tables_stats' => {
+		'output' => 'pg_stat_all_tables.csv',
+		'command' => 'dump_pgstattables',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_tables_stats' => {
+		'output' => 'pg_stat_user_tables.csv',
+		'command' => 'dump_pgstattables_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'all_tables_io_stats' => {
+		'output' => 'pg_statio_all_tables.csv',
+		'command' => 'dump_pgstatiotables',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_tables_io_stats' => {
+		'output' => 'pg_statio_user_tables.csv',
+		'command' => 'dump_pgstatiotables_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'all_indexes_stats' => {
+		'output' => 'pg_stat_all_indexes.csv',
+		'command' => 'dump_pgstatindexes',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_indexes_stats' => {
+		'output' => 'pg_stat_user_indexes.csv',
+		'command' => 'dump_pgstatindexes_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'all_indexes_io_stats' => {
+		'output' => 'pg_statio_all_indexes.csv',
+		'command' => 'dump_pgstatioindexes',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_indexes_io_stats' => {
+		'output' => 'pg_statio_user_indexes.csv',
+		'command' => 'dump_pgstatioindexes_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'all_sequences_io_stats' => {
+		'output' => 'pg_statio_all_sequences.csv',
+		'command' => 'dump_pgstatiosequences',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_sequences_io_stats' => {
+		'output' => 'pg_statio_user_sequences.csv',
+		'command' => 'dump_pgstatiosequences_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'functions_stats' => {
+		'output' => 'pg_stat_user_functions.csv',
+		'command' => 'dump_pgstatuserfunctions',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'xact_functions_stats' => {
+		'output' => 'pg_stat_xact_user_functions.csv',
+		'command' => 'dump_pgstatxactuserfunctions',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'all_xact_tables_stats' => {
+		'output' => 'pg_stat_xact_all_tables.csv',
+		'command' => 'dump_pgstatxacttables',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'user_xact_tables_stats' => {
+		'output' => 'pg_stat_xact_user_tables.csv',
+		'command' => 'dump_pgstatxacttables_user',
+		'repeat'  => 1,
+		'start-end' => 1,
+	},
+	'class_size_stats' => {
+		'output'  => 'pg_class_size.csv',
+		'command' => 'dump_pgclass_size',
+		'repeat'  => 1,
+		'override' => 1,
+	},
+	'lock_types_stats' => {
+		'output'  => 'pg_stat_locks.csv',
+		'command' => 'dump_pgstatlocktypes',
+		'repeat'  => 1,
+	},
+	'lock_modes_stats' => {
+		'output'  => 'pg_stat_locks.csv',
+		'command' => 'dump_pgstatlockmodes',
+		'repeat'  => 1,
+	},
+	'lock_granted_stats' => {
+		'output'  => 'pg_stat_locks.csv',
+		'command' => 'dump_pgstatlockgranted',
+		'repeat'  => 1,
+	},
+	'statements_stats' => {
+		'output'   => 'pg_stat_statements.csv',
+		'command'  => 'dump_pgstatstatements',
+		'override'  => 1,
+	},
+	'waitevent_stats' => {
+		'output'   => 'pg_stat_waitevent.csv',
+		'command'  => 'dump_pgwaitsampling',
+		'repeat'  => 1,
+	},
+	'xlog_stats' => {
+		'output' => 'pg_xlog_stat.csv',
+		'command' => 'dump_xlog_stat'
+	},
+	'database_size_stats' => {
+		'output' => 'pg_database_size.csv',
+		'command' => 'dump_pgdatabase_size'
+	},
+	'connections_stats' => {
+		'output' => 'pg_stat_connections.csv',
+		'command' => 'dump_pgstatconnections'
+	},
+	'pgbouncer_stats' => {
+		'output' => 'pgbouncer_stats.csv',
+		'command' => 'dump_pgbouncerpoolstats'
+	},
+	'pgbouncer_req_stats' => {
+		'output' => 'pgbouncer_req_stats.csv',
+		'command' => 'dump_pgbouncerquerystats'
+	},
+	'unused_indexes_stats' => {
+		'output' => 'pg_stat_unused_indexes.csv',
+		'command' => 'dump_unusedindexes',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'redundant_indexes_stats' => {
+		'output' => 'pg_stat_redundant_indexes.csv',
+		'command' => 'dump_redundantindexes',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'invalid_indexes_stats' => {
+		'output' => 'pg_stat_invalid_indexes.csv',
+		'command' => 'dump_invalidindexes',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+        'hash_indexes_stats' => {
+                'output' => 'pg_stat_hash_indexes.csv',
+                'command' => 'dump_hashindexes',
+                'repeat'  => 1,
+                'override'  => 1,
+        },
+	'missing_fkindexes_stats' => {
+		'output' => 'pg_stat_missing_fkindexes.csv',
+		'command' => 'dump_missingfkindexes',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'count_indexes_stats' => {
+		'output' => 'pg_stat_count_indexes.csv',
+		'command' => 'dump_count_indexes',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'unused_trigfunc_stats' => {
+		'output' => 'pg_stat_unused_trigfunc.csv',
+		'command' => 'dump_unusedtrigfunc',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'pg_settings_stats' => {
+		'output' => 'pg_settings.csv',
+		'command' => 'dump_pgsettings',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'pg_nondefault_settings_stats' => {
+		'output' => 'pg_nondefault_settings.csv',
+		'command' => 'dump_nondefault_pgsettings',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'pg_db_role_setting_stats' => {
+		'output' => 'pg_db_role_setting.csv',
+		'command' => 'dump_pgdbrolesetting',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'database_buffercache_stats' => {
+		'output' => 'pg_database_buffercache.csv',
+		'command' => 'dump_pgdatabase_buffercache'
+	},
+	'database_usagecount_stats' => {
+		'output' => 'pg_database_usagecount.csv',
+		'command' => 'dump_pgdatabase_usercount'
+	},
+	'database_isdirty_stats' => {
+		'output' => 'pg_database_isdirty.csv',
+		'command' => 'dump_pgdatabase_isdirty'
+	},
+	'relation_buffercache_stats' => {
+		'output' => 'pg_relation_buffercache.csv',
+		'command' => 'dump_pgrelation_buffercache',
+	},
+	'archiver_stats' => {
+		'output' => 'pg_stat_archiver.csv',
+		'command' => 'dump_pgstatarchiver',
+	},
+	'configuration_stats' => {
+		'output' => '',
+		'command' => 'get_configuration_files',
+	},
+	'unlogged_stats' => {
+		'output' => 'pg_stat_unlogged.csv',
+		'command' => 'dump_unlogged',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+	'prepared_stats' => {
+		'output' => 'pg_prepared_xact.csv',
+		'command' => 'dump_preparedxactstats'
+	},
+	'statistics_stats' => {
+		'output' => 'pg_stat_ext.csv',
+		'command' => 'dump_statisticsext',
+		'repeat'  => 1,
+		'override'  => 1,
+	},
+);
+
+# Read configuration file before reading command line parameters
+&read_conf();
+
+# Process command line options and look for an action keyword. There
+# are no mandatory options.
+my $result = GetOptions(
+	"B|enable-buffercache!" => \$USE_BUFFERCACHE,
+	"c|capture!"     => \$CAPTURE,
+	"C|end-counter=s"=> \$END_AFTER_COUNTER,
+	"d|dbname=s"     => \$DBNAME,
+	"D|daemonize!"   => \$DAEMONIZE,
+	"E|end-after=s"  => \$END_AFTER,
+	"f|pid-file=s"   => \$PIDFILE,
+	"h|host=s"       => \$DBHOST,
+	"i|interval=i"   => \$INTERVAL,
+	"I|incremental!" => \$INCREMENTAL,
+	"k|kill!"        => \$KILL,
+	"m|metric=s"     => \@METRICS,
+	"M|max-size=s"   => \$MAX_SIZE,
+	"p|port=i"       => \$DBPORT,
+	"P|psql=s"       => \$PSQL_PROG,
+	"Q|no-statement!"=> \$NO_STATEMENTS,
+	"r|rotate-daily!"=> \$D_ROTATE,
+	"R|rotate-hourly!"=> \$H_ROTATE,
+	"s|sar=s"        => \$SAR_PROG,
+	"S|disable-sar!" => \$DISABLE_SAR,
+	"t|lock-timeout=i" => \$LOCK_TIMEOUT,
+	"T|no-tablespace!"=> \$NOTABLESPACE,
+	"U|dbuser=s"     => \$DBUSER,
+	"v|verbose!"     => \$DEBUG,
+	"V|version!"     => \$SHOW_VER,
+	"w|no-waitevent!"=> \$NO_WAITEVENT,
+	"W|password=s"   => \$DBPASS,
+	"z|compress!"    => \$COMPRESS,
+	"pgversion=s"    => \$PG_VERSION,
+	"pgservice=s"    => \$DBSERVICE,
+	"help!"          => \$HELP,
+	"stat-type=s"    => \$STAT_TYPE,
+	"sar-file=s"     => \$SAR_FILE,
+	"list-metric!"   => \$LIST_METRIC,
+	"pgbouncer-args=s" => \$PGBOUNCER_ARGS,
+	"sysinfo!"       => \$OS_INFO,
+	"no-sysinfo!"    => \$NO_SYSINFO,
+	"no-database!"   => \$NO_DATABASE,
+	"included-db=s"  => \$INCLUDED_DB,
+	"exclude-time=s" => \$SKIP_HOURS,
+	'enable-ssh!'    => \$USE_SSH,
+	'ssh-command=s'  => \$SSH_COMMAND,
+	'ssh-program=s'  => \$SSH_BIN,
+	'ssh-identity=s' => \$SSH_IDENTITY,
+	'ssh-option=s'   => \$SSH_OPTIONS,
+	'ssh-user=s'     => \$SSH_USER,
+	'ssh-timeout=i'  => \$SSH_TIMEOUT,
+	'cron-user=s'    => \$CRONUSER,
+	'package-list=s' => \$PKG_LIST_PROG,
+	'retention=i'    => \$RETENTION,
+	"pidstat=s"      => \$PIDSTAT_PROG,
+	"pidstat-file=s" => \$PIDSTAT_FILE,
+) or die &usage();
+
+# Clean retention value
+if ($RETENTION) {
+	$RETENTION =~ s/[+\-]//g;
+}
+
+# Set current username for cron listing
+if (!$CRONUSER) {
+	$CRONUSER = $ENV{USERNAME} || 'postgres';
+}
+
+# Print version number to stdout
+if ($SHOW_VER) {
+	print "Version: $VERSION\n";
+	exit 0;
+}
+
+END {
+	kill '-TERM', $SAR_PID if ($SAR_PID);
+	kill '-TERM', $PIDSTAT_PID if ($PIDSTAT_PID);
+}
+
+# The daemon should be stopped
+if ($KILL)
+{
+	my $proc = '';
+	if (-e "$PIDFILE") {
+		$proc = `cat $PIDFILE`;
+	} else {
+		$proc = `ps h -opid -Cpgcluu_collectd | head -1`;
+	}
+	chomp($proc);
+	$proc =~ s/ //g;
+
+	if (!$proc) {
+		die "ERROR: can't find a pid to kill, is $PROGRAM running?\n";
+	}
+
+	kill '-TERM', $proc;
+	if ($? == -1) {
+		print "FATAL: failed to execute: $!\n";
+	} elsif ($? & 127) {
+		printf "ERROR: child died with signal %d, %s coredump\n", ($? & 127),  ($? & 128) ? 'with' : 'without';
+	} else {
+		printf "OK: pgcluu_collectd exited with value %d\n", $? >> 8;
+	}
+	exit 0;
+}
+
+# Display usage if help is asked
+&usage if $HELP;
+
+if ($CAPTURE && $DAEMONIZE) {
+	die "ERROR: option -D (--daemonize) can not be used with option -c (--capture).\n";
+} elsif ($CAPTURE) {
+	$DISABLE_SAR = 1;
+}
+
+# Set PGOPTIONS environment variable
+$ENV{PGOPTIONS} = "$ENV{PGOPTIONS} -c lock_timeout=${LOCK_TIMEOUT}s";
+
+# Set the multi host information
+my @MULTI_HOST_INFO = ();
+my @dbnames = split(/,/, $DBNAME);
+my @dbports = split(/,/, $DBPORT);
+my @dbhosts = split(/,/, $DBHOST);
+my @dbusers = split(/,/, $DBUSER);
+my @dbpass = split(/,/, $DBPASS);
+for (my $i = 0; $i <= $#dbhosts; $i++)
+{
+	push(@MULTI_HOST_INFO, { 'ip' => $dbhosts[$i] || 'localhost', 'port' => $dbports[$i] || 5432, 'db' => $dbnames[$i] || 'postgres', 'user' => $dbusers[$i] || 'postgres', 'password' => $dbpass[$i] || ''});
+}
+
+# Get the output dir from command line
+my $OUTPUT_DIR = $ARGV[0] || '';
+# Overwrite the output directory in capture mode
+if ($CAPTURE)
+{
+	$OUTPUT_DIR = 'pgcluu_capture';
+	unless(mkdir("$CAPTURE_DIR/$OUTPUT_DIR")) {
+		die "FATAL: can not create capture temporary directory $CAPTURE_DIR/$OUTPUT_DIR: $!.\n";
+	} else {
+		print "INFO: creating temporary output directory: $CAPTURE_DIR/$OUTPUT_DIR\n";
+	}
+}
+
+if ($USE_SSH && !$DBHOST) {
+	die "FATAL: you must give an ipaddress for the remote host with -h | --host option to use sar remotely\n";
+}
+
+# List metrics and associated SQL commands, then exit
+if ($LIST_METRIC)
+{
+	print "List of available metrics:\n\n";
+	foreach my $c (sort {$a cmp $b} keys %METRICS_COMMANDS)
+	{
+		next if (($c =~ /^(user|all)_/) && ($c !~ /^$STAT_TYPE/));
+		$c =~ s/_stats$//;
+		print "\t$c\n";
+	}
+	print "\n";
+	exit 0;
+}
+
+# Check if an other process is already running
+if (-f $PIDFILE)
+{
+	&dprint("FATAL: an other process is already started, see pid in $PIDFILE\n");
+	exit 1;
+}
+
+# Check excluded times
+if ($SKIP_HOURS)
+{
+	my @timerange = split(/\s+/, $SKIP_HOURS);
+	foreach my $t (@timerange)
+	{
+		next if (!$t);
+		if ($t =~ m#(\d{2}):(\d{2})-(\d{2}):(\d{2})#)
+		{
+			push(@SKIP_BEGIN, "$1$2");
+			push(@SKIP_END, "$3$4");
+		} else {
+			&dprint("FATAL: Bad time range: $t. Format of exclusion time must be: HH:MM-HH:MM\n");
+		}
+	}
+}
+
+# Normalize number of seconds before terminating
+if ($END_AFTER)
+{
+	$END_AFTER =~ s/(\D+)//g;
+	$END_AFTER ||= 0;
+	if ($1 =~ /^M/i) {
+		$END_AFTER *= 60;
+	} elsif ($1 =~ /^H/i) {
+		$END_AFTER *= 3600;
+	} elsif ($1 =~ /^D/i) {
+		$END_AFTER *= 86400;
+	}
+}
+
+# Set max size of the output dir before terminating
+$MAX_SIZE = &parse_pretty_size($MAX_SIZE);
+
+# Validate action(s) to execute
+if ($#METRICS >= 0)
+{
+	my @list_metric = ();
+	push(@list_metric, split(/[,]+/, join(',', @METRICS)));
+	@METRICS = ();
+	foreach my $a (@list_metric)
+	{
+		if (!grep(/^${a}_stats$/, keys %METRICS_COMMANDS))
+		{
+			&dprint("FATAL: metric $a does not exist. Use --list-metric to show the available metrics.\n");
+			exit 1;
+		} else {
+			push(@METRICS, "${a}_stats");
+		}
+	}
+}
+else
+{
+	# Perform all metrics actions per default
+	push(@METRICS, sort {$a cmp $b} keys %METRICS_COMMANDS);
+}
+
+# Check if output directory exists
+if (!$OUTPUT_DIR)
+{
+	&dprint("FATAL: no output directory\n");
+	exit 1;
+}
+elsif (!$CAPTURE)
+{
+	# Ensure this is not a relative path
+	if (dirname($OUTPUT_DIR) eq '.') {
+		&dprint("FATAL: output directory ($OUTPUT_DIR) is not an absolute path.\n");
+		exit 1;
+	}
+}
+
+# Go to that directory if we are not in capture mode otherwise go to /tmp
+if (!$CAPTURE)
+{
+	unless (chdir($OUTPUT_DIR))
+	{
+		&dprint("FATAL: can not change directory to $OUTPUT_DIR: $!\n");
+		exit 1;
+	}
+	else
+	{
+		# Check if we can write in this directory
+		my $fh = IO::File->new("wtest", 'w');
+		if (not defined $fh)
+		{
+			&dprint("FATAL: can not write into output directory $OUTPUT_DIR\n");
+			exit 1;
+		}
+		close($fh);
+		unlink("wtest");
+
+	}
+}
+else
+{
+	unless(chdir("$CAPTURE_DIR"))
+	{
+		&dprint("FATAL: can not change directory to $CAPTURE_DIR: $!\n");
+		exit 1;
+	}
+	$OUT_DIR = $OUTPUT_DIR;
+}
+
+# Generate the sar command
+my $def_sar_command = "LC_ALL=C $SAR_PROG -t -p -A 1 1 | grep -vE 'Average|Summary'";
+my $def_pidstat_command = "LC_ALL=C $PIDSTAT_PROG -T ALL -u -w -r -d -U postgres 1 1 | grep -v 'Average'";
+my $sshcmd = '';
+# Set command to execute sar remotely using ssh if necessary
+if ($USE_SSH)
+{
+	# Force using the user defined ssh command
+	if ($SSH_COMMAND)
+	{
+		$sshcmd = $SSH_COMMAND;
+	}
+	# else compute command following the configuration parameters
+	else
+	{
+		$sshcmd = $SSH_BIN || 'ssh';
+		$sshcmd .= " -i $SSH_IDENTITY" if ($SSH_IDENTITY);
+		$sshcmd .= " $SSH_OPTIONS" if ($SSH_OPTIONS);
+		if ($SSH_USER) {
+			$sshcmd .= " $SSH_USER\@$DBHOST";
+		} else {
+			$sshcmd .= " $DBHOST";
+		}
+	}
+
+# With remote database connection and no ssh acces, disable system and sar information
+}
+elsif ($DBHOST && !grep(/^$DBHOST$/, 'localhost', '127.0.0.1', '::1'))
+{
+	$NO_SYSINFO = 1;
+	$DISABLE_SAR = 1;
+}
+
+# Get Os information and exit
+if ($OS_INFO && !$NO_SYSINFO)
+{
+	&grab_os_information();
+	exit 0;
+}
+
+
+# Die cleanly on signal
+sub terminate
+{
+	my $sig = shift;
+
+	$fini = 1;
+
+	&dprint("LOG: Received terminating signal $sig.\n");
+
+        $SIG{INT} = \&terminate;
+        $SIG{TERM} = \&terminate;
+
+	if (-f $PIDFILE) {
+		unlink("$PIDFILE");
+	}
+
+	# Wait for all child processes to die except for the logger
+	&wait_all_childs();
+	exit 0;
+}
+
+# Die on kill -2, -3 or -15
+$SIG{'INT'} = $SIG{'QUIT'} = $SIG{'TERM'} = \&terminate;
+
+# Run in interactive mode if required
+if (!$DAEMONIZE) {
+	# Start in interactive mode
+	print "\n*** $PROGRAM v$VERSION (pid:$$) started at " . localtime(time) . "\n";
+	if ($CAPTURE) {
+		print "Capture mode enabled, $PROGRAM will ended after one single loop.\n\n";
+	} else {
+		print "Type Ctrl+c to quit.\n\n";
+	}
+} else {
+	# detach from terminal
+	my $pid = fork;
+	exit 0 if ($pid);
+	die "FATAL: Couldn't fork: $!" unless defined($pid);
+	POSIX::setsid() or die "Can't detach: \$!";
+	&dprint("LOG: Detach from terminal with pid: $$\n");
+	open(STDIN , '<', "/dev/null");
+	open(STDOUT, '>', "/dev/null");
+	open(STDERR, '>', "/dev/null");
+}
+
+
+# Set name of the program without path
+my $orig_name = $0;
+$0 = $PROGRAM;
+
+# Create pid file
+my $fhp = IO::File->new($PIDFILE, 'w');
+if (not defined $fhp) {
+	die "FATAL: can't create pid file $PIDFILE, $!\n";
+}
+print $fhp $$;
+close($fhp);
+
+# Generate the psql commands
+$PSQL_PROG .= " -XAtq -F';' ";
+my $PGBOUNCER_PROG = $PSQL_PROG . ' ' . $PGBOUNCER_ARGS . ' pgbouncer';
+$PSQL_PROG .= " -f - ";
+
+
+if ($NO_DATABASE) {
+	$PSQL_PROG = '';
+} else {
+	$PSQL_PROG .= " -h $DBHOST" if ($DBHOST);
+	$PSQL_PROG .= " -p $DBPORT" if ($DBPORT);
+	$PSQL_PROG .= " -U $DBUSER" if ($DBUSER);
+	if ($#dbnames >= 0) {
+		if ($dbnames[0] !~ /^[a-z0-9\_\-]+$/i) {
+			$PSQL_PROG .= " -d '$dbnames[0]'";
+		} else {
+			$PSQL_PROG .= " -d $dbnames[0]";
+		}
+	}
+	if ($DBPASS) {
+		$ENV{PGPASSWORD} = $DBPASS;
+	}
+}
+
+# Try to grab the sysstat version
+my $sysstat_version = '';
+if (!$CAPTURE) {
+	$sysstat_version = &sysstat_version() || '';
+}
+
+# Remove action that can't be run with the PostgreSQL version
+my $PG_RET = '';
+$PG_RET = &verify_action() if (!$NO_DATABASE);
+
+# Look if we should limit statistic collect to some DB
+my @included_dbs = ();
+@included_dbs = split(/,/, $INCLUDED_DB) if ($INCLUDED_DB);
+
+# end counter
+my $tcounter = 0;
+
+# Force rotation in incremental mode
+if ($INCREMENTAL) {
+	$D_ROTATE = 1;
+	$H_ROTATE = 1;
+}
+
+my $previous_time = 0;
+while (1)
+{
+	# Stores loop start time
+	my $t0 = time;
+
+	# Do not collect metrics if previous time is upper than current time.
+	# This is to prevent collecting statistics twice when the hour change
+	# for daylight saving.
+	if ($previous_time && ($t0 < $previous_time)) {
+		# Wait next run following the interval value
+		sleep($INTERVAL);
+		next;
+	}
+	$previous_time = $t0;
+
+	# Search if the monitoring need to stop here
+	if ($END_AFTER && ($t0 > ($START_TIME + $END_AFTER))) {
+		unlink_pid_and_exit("LOG: ending time reach, terminating.", 0);
+	}
+
+	# If counter reached then exit
+	$tcounter++;
+
+	if (($END_AFTER_COUNTER > 0) && ($tcounter > $END_AFTER_COUNTER)) {
+		unlink_pid_and_exit("LOG: counter reached, terminating.", 0);
+	}
+
+	# Some time range may not collect data
+	my ($sec , $min, $hour, $mday, $mon, $year, @other) = localtime(time);
+	$min = "0$min" if ($min < 10);
+	$hour = "0$hour" if ($hour < 10);
+	$mday = "0$mday" if ($mday < 10);
+	$mon++;
+	$mon = "0$mon" if ($mon < 10);
+	$year += 1900;
+	if (!$CAPTURE) {
+		for (my $i = 0; $i <= $#SKIP_BEGIN; $i++) {
+			if ( $SKIP_BEGIN[$i] <= $SKIP_END[$i] ) {
+				if ( ("$hour$min" >= $SKIP_BEGIN[$i]) && ("$hour$min" <= $SKIP_END[$i]) ) {
+					# Wait next run
+					sleep($INTERVAL);
+					next;
+				}
+			} elsif ( $SKIP_BEGIN[$i] > $SKIP_END[$i] ) {
+				if ( ("$hour$min" >= $SKIP_BEGIN[$i]) && ("$hour$min" < 2400) ||
+						("$hour$min" <= $SKIP_END[$i]) && ("$hour$min" > 0)) {
+					# Wait for next run
+					sleep($INTERVAL);
+					next;
+				}
+			}
+		}
+	}
+
+	####
+	# Output dir is now relative to $OUTPUT_DIR because we have chdir to that directory.
+	####
+
+	# Compress previous daily directory if required
+	if ($COMPRESS && $OLD_OUT_DIR && ($OLD_OUT_DIR ne "$year/$mon/$mday") && $D_ROTATE && !$H_ROTATE) {
+		# Fork a process to compress old data files in parallel
+		&spawn_compress(sub {
+			&compress_files($OLD_OUT_DIR);
+		});
+	}
+
+	# Set daily rotation subdirectories
+	if ($D_ROTATE && !$H_ROTATE && !-d "$year/$mon/$mday") {
+		mkdir("$year") if (!-d "$year");
+		mkdir("$year/$mon") if (!-d "$year/$mon");
+		mkdir("$year/$mon/$mday");
+		# Set the new output directory
+		$OUT_DIR = "$year/$mon/$mday";
+	} elsif ($D_ROTATE) {
+		# Set the new output directory
+		$OUT_DIR = "$year/$mon/$mday";
+        }
+
+	# Compress previous hourly directory if required
+	if ($COMPRESS && $OLD_OUT_DIR && ($OLD_OUT_DIR ne "$year/$mon/$mday/$hour") && $H_ROTATE) {
+		# Fork a process to compress old data files in parallel
+		&spawn_compress(sub {
+			&compress_files($OLD_OUT_DIR);
+		});
+	}
+
+	# Set hourly rotation/incremental subdirectories
+	if ($H_ROTATE && !-d "$year/$mon/$mday/$hour") {
+		mkdir("$year") if (!-d "$year");
+		mkdir("$year/$mon") if (!-d "$year/$mon");
+		mkdir("$year/$mon/$mday") if (!-d "$year/$mon/$mday");
+		mkdir("$year/$mon/$mday/$hour");
+		# Set the new output directory
+		$OUT_DIR = "$year/$mon/$mday/$hour";
+	} elsif ($H_ROTATE) {
+		# Set the new output directory
+		$OUT_DIR = "$year/$mon/$mday/$hour";
+	} else {
+		$OUT_DIR = $OUTPUT_DIR;
+        }
+
+	# If we have a retention limit remove everything older
+	if ($RETENTION > 0 && $OUTPUT_DIR && $year) {
+		# We don't use the output directory as root dir but the year
+		# subdirectory. Rewind to previous year first in case we have
+		# year overlap.
+		$year--;
+		if (-d "$OUTPUT_DIR/$year") {
+			`find '$OUTPUT_DIR/$year/' -name '*' -mtime +$RETENTION -delete`;
+		}
+		$year++;
+		if (-d "$OUTPUT_DIR/$year") {
+			`find '$OUTPUT_DIR/$year/' -name '*' -mtime +$RETENTION -delete`;
+		}
+	}
+
+	# Set the sar and pidstat command
+	my $sar_command = '';
+	my $pidstat_command = '';
+	if (!$DISABLE_SAR  && $sysstat_version)
+	{
+		$sar_command = ($sshcmd) ? $sshcmd . ' "' . $def_sar_command . ' "' : $def_sar_command;
+		$sar_command .= " >>'$OUT_DIR/$SAR_FILE'";
+		$pidstat_command = ($sshcmd) ? $sshcmd . ' "' . $def_pidstat_command . ' "' : $def_pidstat_command;
+		$pidstat_command .= " >>'$OUT_DIR/$PIDSTAT_FILE'";
+
+		# Start processes to collect system statistics permanently
+		&spawn_sar(sub {
+			&collect_sysstat($sar_command);
+		});
+		&spawn_pidstat(sub {
+			&collect_sysstat($pidstat_command);
+		});
+	}
+
+	# Collect all metrics about the cluster
+	&collect_metrics();
+
+	# stores previous directory to check when rotated files must compressed
+	$OLD_OUT_DIR = $OUT_DIR;
+
+	# Wait for metric + compress child process to terminate
+	&wait_all_childs();
+
+	# We received a signal while waiting
+	last if ($fini);
+
+	if (!$CAPTURE)
+	{
+		# Lookup if output dir size is upper than limit
+		if ($MAX_SIZE)
+		{
+			my $lsize = `du -s '$OUTPUT_DIR'`;
+			chomp($lsize);
+			if ($lsize > $MAX_SIZE) {
+				unlink_pid_and_exit("LOG: max size limit reach, terminating.", 0);
+			}
+		}
+
+		# Wait next run following the interval value
+		my $t1 = time - $t0;
+		if ($t1 >= $INTERVAL)
+		{
+			print "WARNING: loop took: $t1 seconds, you may consider increase the interval ($INTERVAL sec) using -i option.\n";
+			# Wait next run following the interval value
+			sleep($INTERVAL);
+		}
+		else
+		{
+			# Wait next run following the interval value minus the loop time
+			sleep($INTERVAL - $t1);
+		}
+	}
+	else
+	{
+		# get out of the main loop
+		last;
+	}
+
+	# We received a signal when sleeping
+	last if ($fini);
+}
+
+# Wait for last child stop
+&wait_all_childs();
+
+# In capture mode we have to create a tarball
+if ($CAPTURE) {
+	# be sure to be in the parent directory
+	chdir($CAPTURE_DIR);
+	# Then create a tarball before removing the output directory
+	print "INFO: creating archive $CAPTURE_DIR/pgcluu_capture.tar.gz of the capture directory $CAPTURE_DIR/$OUTPUT_DIR.\n";
+	`$TAR_PROG pgcluu_capture.tar.gz '$OUTPUT_DIR'`;
+	# Removing temporary directory and ensure that we are not removing anything else
+	print "INFO: removing capture temporary directory: $CAPTURE_DIR/$OUTPUT_DIR\n";
+	if ($OUTPUT_DIR eq 'pgcluu_capture') {
+		`rm -rf '$OUTPUT_DIR'`;
+	}
+}
+
+if (-f $PIDFILE) {
+	unlink("$PIDFILE") or &dprint("ERROR: Unable to remove pid file $PIDFILE, $!\n");
+}
+
+exit 0;
+
+####
+# Collect system information using the given command
+####
+sub collect_sysstat
+{
+	local $SIG{USR1} = sub {
+		print STDERR "Received terminate signal, exiting.\n";
+		exit 1;
+	};
+	$0 = "pgcluu_collectd: $_[0]";
+
+	`$_[0]`;
+}
+
+####
+# Collect system information about the cluster
+####
+sub collect_metrics
+{
+	# Use a	 temporary file, final file sysinfo.txt is overridden at end of the function
+	if (-e "$OUT_DIR/sysinfo.txt.tmp") {
+		# Remove old system information file
+		unlink("$OUT_DIR/sysinfo.txt.tmp");
+	}
+
+	# Store current pgcluu configuration
+	my $fhl = IO::File->new("$OUT_DIR/sysinfo.txt.tmp", 'a');
+	if (not defined $fhl) {
+		&dprint("FATAL: can not write into file $OUT_DIR/sysinfo.txt\n");
+		unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/sysinfo.txt.tmp, $!", 1);
+	}
+	print $fhl "[CONFIGURATION]\n";
+	print $fhl "capture=$CAPTURE\n";
+	print $fhl "sysstat=$sysstat_version\n" if ($sysstat_version);
+	close($fhl);
+
+	# Collect PostgreSQL global cluster information and save all into $OUT_DIR/sysinfo.txt
+	# Diff with old collected information will be saved to sysinfo.txt.diff
+	if (!$NO_DATABASE && ($PG_RET >= 0)) {
+		&get_initial_info();
+	}
+
+	# Get System information  and save all into $OUT_DIR/sysinfo.txt
+	# Diff with old collected information will be saved to sysinfo.txt.diff
+	if (!$NO_SYSINFO) {
+		&grab_os_information($OUT_DIR);
+	}
+
+	####
+	# Stores settings and detect change
+	####
+	if (!$NO_DATABASE) {
+		# Collect previous PostgreSQL settings to track changes
+		&load_settings($OUT_DIR, \%ORIGINAL_PG_SETTINGS,\%ORIGINAL_DBROLE_SETTINGS);
+	}
+
+	# Copy configuration files into output directory and keep track of change
+	if (!$NO_DATABASE && ($#METRICS >= 0) && grep(/^configuration_stats$/, @METRICS))
+	{
+		my @conf_files = $METRICS_COMMANDS{'configuration_stats'}->{command}->();
+		@conf_files = () if ($PG_RET < 0);
+		my $outdir = $OUT_DIR;
+		$outdir = "$CAPTURE_DIR/$OUT_DIR" if ($CAPTURE);
+		foreach my $f (@conf_files, '/etc/pgbouncer/pgbouncer.ini')
+		{
+			my $filename = basename($f);
+			# Rename old file to be able to perform a diff
+			if (-e "$OUT_DIR/$filename") {
+				# Unlink any temporary renaming of file (can only appears with a crash/interrupt)
+				unlink("$OUT_DIR/$filename.tmpold");
+				rename ("$OUT_DIR/$filename","$OUT_DIR/$filename.tmpold");
+			}
+			if ($sshcmd) {
+				`$sshcmd "$CAT_PROG $f" >"$outdir/$filename" 2>/dev/null`;
+			} else {
+				`$CAT_PROG $f >"$outdir/$filename" 2>/dev/null`;
+			}
+			if (-z "$OUT_DIR/$filename") {
+				# remove file when empty
+				unlink("$OUT_DIR/$filename" );
+			} elsif (-e "$OUT_DIR/$filename.tmpold") {
+				# Perform a diff to keep track of configuration change
+				`$DIFF_PROG "$OUT_DIR/$filename.tmpold" "$OUT_DIR/$filename" >> "$OUT_DIR/$filename.diff"`;
+				unlink("$OUT_DIR/$filename.tmpold");
+				# When there's no change do not keep the file
+				if (-z "$OUT_DIR/$filename.diff") {
+					unlink("$OUT_DIR/$filename.diff");
+				}
+			}
+		}
+	}
+
+	# Remove files that must be overriden
+	foreach my $type (sort {$a cmp $b} keys %METRICS_COMMANDS)
+	{
+		if ($METRICS_COMMANDS{$type}->{override} && -e "$OUT_DIR/$METRICS_COMMANDS{$type}->{output}")
+		{
+			unlink("$OUT_DIR/$METRICS_COMMANDS{$type}->{output}");
+		}
+	}
+
+	# Generating global statistics collector SQL script
+	my $script_sql = &create_sql_script();
+	if (!$script_sql && ($#METRICS < 0))
+	{
+		# No action can be perform with this PostgreSQL version
+		unlink_pid_and_exit("FATAL: no action will be run on this PostgreSQL version $DB_INFO{major}.$DB_INFO{minor}, $!", 1);
+	}
+	if (!$NO_DATABASE)
+	{
+		# Collecting database statistics if there other than pgbouncer metrics to collect
+		if ($PG_RET >= 0) {
+			if (open($fhl, '|-', $PSQL_PROG)) {
+				print $fhl $script_sql, "\n";
+				close($fhl);
+			} else {
+				&dprint("FATAL: failure when calling psql command: $PSQL_PROG, $!\n");
+				unlink_pid_and_exit("FATAL: failure when calling psql command: $PSQL_PROG, $!", 1);
+			}
+
+			# Get database list
+			my @dblist = &get_databases();
+			push(@dblist, $DBNAME) if (($#dblist == -1) && $DBNAME);
+
+			# Generating per database statistics collector SQL script
+			foreach my $db (@dblist)
+			{
+
+				next if (($#included_dbs >= 0) && !grep(/^$db$/i, @included_dbs));
+				my $script_repeat_sql = &create_sql_script($db);
+				if (!$script_repeat_sql) {
+					last;
+				}
+				my $LOCAL_PSQL_PROG = &set_local_psql_command($db);
+
+				# Collecting database statistics
+				if (open($fhl, '|-', $LOCAL_PSQL_PROG)) {
+					print $fhl $script_repeat_sql, "\n";
+					close($fhl);
+				} else {
+					&dprint("FATAL: failure when calling psql command: $LOCAL_PSQL_PROG, $!\n");
+					unlink_pid_and_exit("FATAL: failure when calling psql command: $LOCAL_PSQL_PROG, $!", 1);
+				}
+			}
+		}
+
+		# Keep track of settings change
+		if (scalar keys %ORIGINAL_PG_SETTINGS > 0)
+		{
+			my %current_pg_settings = ();
+			my %current_dbrole_settings = ();
+			# Collect current PostgreSQL settings to look compare values
+			&load_settings($OUT_DIR, \%current_pg_settings,\%current_dbrole_settings);
+			# Save pg_settings into a temporary files
+			my ($file1, $file2) = &save_pg_settings($OUT_DIR, \%ORIGINAL_PG_SETTINGS,\%current_pg_settings);
+			# Perform a diff to keep track of configuration change
+			`$DIFF_PROG "$file1" "$file2" >> "$OUT_DIR/pg_settings.diff"`;
+			unlink($file2, $file1);
+			# When there's no change do not keep the file
+			if (-z "$OUT_DIR/pg_settings.diff") {
+				unlink("$OUT_DIR/pg_settings.diff");
+			}
+			# Save settings into temporaries files
+			($file1, $file2) = &save_dbrole_settings($OUT_DIR, \%ORIGINAL_DBROLE_SETTINGS,\%current_dbrole_settings);
+			# Perform a diff to keep track of configuration change
+			`$DIFF_PROG "$file1" "$file2" >> "$OUT_DIR/pg_db_role_setting.diff"`;
+			# When there's no change do not keep the file
+			if (-z "$OUT_DIR/pg_db_role_setting.diff") {
+				unlink("$OUT_DIR/pg_db_role_setting.diff");
+			}
+			unlink($file2, $file1);
+		}
+	}
+
+	# Collecting pgbouncer statistics
+	if ($PGBOUNCER_ARGS)
+	{
+		foreach my $c (@METRICS)
+		{
+			next if ($c !~ /^pgbouncer_/);
+			# create a timestamp to registrer pgbouncer statistics
+			my $timestamp = &get_current_timestamp();
+
+			my $sql = '';
+			eval { $sql = &{$METRICS_COMMANDS{$c}->{command}}; };
+			if (!$sql || $@) {
+				if (-f $PIDFILE) {
+					unlink("$PIDFILE") or &dprint("ERROR: Unable to remove pid file $PIDFILE, $!\n");
+				}
+				die "FATAL: no SQL with metric command pgbouncer_stats ($sql).\n" if (!$sql || $@);
+			}
+
+			# Remove lock_timeout from PGOPTIONS environment variable
+			# when querying pgbouncer, it is restored after the command
+			my $tmp_pgopt = $ENV{PGOPTIONS};
+			$tmp_pgopt =~ s/ -c lock_timeout=\d+s//;
+			$ENV{PGOPTIONS} = $tmp_pgopt;
+			# Get statistics from pgbouncer
+			`$PGBOUNCER_PROG -c "$sql" | sed 's/^/$timestamp;/' $FILE_REDIR '$OUT_DIR/$METRICS_COMMANDS{$c}->{output}'`;
+			# Restore PGOPTIONS environment variable
+			$ENV{PGOPTIONS} = "$ENV{PGOPTIONS} -c lock_timeout=${LOCK_TIMEOUT}s";
+			if ($? != 0) {
+				&dprint("LOG: $PGBOUNCER_PROG -c \"$sql\" | sed 's/^/$timestamp;/' $FILE_REDIR '$OUT_DIR/$METRICS_COMMANDS{$c}->{output}'\n");
+				&dprint("ERROR: pgbouncer pool query failure, $!\n");
+			}
+		}
+	}
+
+	if (!$NO_SYSINFO && $sysstat_version lt "11.7.4")
+	{
+		# Store filesystem use information
+		my @fsuse = `$DF_COMMAND 2>/dev/null`;
+		if ($#fsuse > 0) {
+			shift(@fsuse); # remove header
+			chomp(@fsuse);
+			my $ntime = &get_current_timestamp();
+			map { s/\s+/;/g; s/^/$ntime;/; } @fsuse; # format output to csv
+			# Filesystem;1K-blocks;Used;Avail;Inodes;IUsed;IFree;Typer;Mounted on
+			$fhl = IO::File->new("$OUT_DIR/fs_stat_use.csv", 'a');
+			if (not defined $fhl) {
+				&dprint("FATAL: can not write into file $OUT_DIR/fs_stat_use.csv\n");
+				unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/fs_stat_use.csv, $!", 1);
+			}
+			print $fhl join("\n", @fsuse), "\n";
+			close($fhl);
+		}
+	}
+
+	# Override sysinfo.txt to be atomic
+	if (-e "$OUT_DIR/sysinfo.txt.tmp") {
+		`mv -f '$OUT_DIR/sysinfo.txt.tmp' '$OUT_DIR/sysinfo.txt'`;
+	}
+}
+
+
+sub get_initial_info
+{
+	return if ($NO_DATABASE);
+
+	# Get list of database in the PostgreSQL cluster
+	my @alldbs = ();
+	if ($#dbnames >= 0) {
+		# from command line
+		push(@alldbs, @dbnames);
+	} else {
+		# or by querying the database list
+		@alldbs = &get_databases();
+	}
+
+	# Store PG version into sysinfo file
+	&fetch_version(1);
+
+	# Store PG uptime into sysinfo file
+	&get_uptime(1);
+
+	# Collect general information about each database
+	if ($#alldbs > -1)
+	{
+		@extensions = ();
+		my @schemas = ();
+		my @json = ();
+		my @procs = ();
+		my @trigs = ();
+		my %parts = ();
+		my $fhl = IO::File->new("$OUT_DIR/sysinfo.txt.tmp", 'a');
+		if (not defined $fhl) {
+			&dprint("FATAL: can not write into file $OUT_DIR/sysinfo.txt.tmp\n");
+			unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/sysinfo.txt.tmp, $!", 1);
+		}
+		if (&backend_minimum_version(9, 1)) {
+			# Look for all installed extensions
+			print $fhl "[EXTENSION]\n";
+			foreach my $db (sort @alldbs)
+			{
+				my @ext = &get_extensions($db);
+				push(@extensions, "$db=" . join(',', sort @ext)) if ($#ext >= 0);
+			}
+			foreach my $e (@extensions) {
+				print $fhl "$e\n";
+			}
+		}
+		# Look for all schema in a database
+		print $fhl "[SCHEMA]\n";
+		foreach my $db (sort @alldbs) {
+			my @sch = &get_schemas($db);
+			push(@schemas, "$db=" . join(',', sort @sch)) if ($#sch >= 0);
+		}
+		foreach my $s (@schemas) {
+			print $fhl "$s\n";
+		}
+		# Look for all JSON vs JSONB columns in a database
+		print $fhl "[JSON]\n";
+		foreach my $db (sort @alldbs) {
+			my @col = &get_json_cols($db);
+			push(@json, "$db=" . join(',', sort @col)) if ($#col >= 0);
+		}
+		foreach my $s (@json) {
+			print $fhl "$s\n";
+		}
+		# Look for all procedure in a database
+		print $fhl "[PROCEDURE]\n";
+		foreach my $db (sort @alldbs) {
+			my $pro = &get_proc_count($db);
+			push(@procs, "$db=" . $pro);
+		}
+		foreach my $p (@procs) {
+			print $fhl "$p\n";
+		}
+		# Look for all schema in a database
+		print $fhl "[TRIGGER]\n";
+		foreach my $db (sort @alldbs) {
+			my $tgs = &get_triggers($db);
+			push(@trigs, "$db=$tgs");
+		}
+		foreach my $t (@trigs) {
+			print $fhl "$t\n";
+		}
+		# Look for partitionned tables in a database
+		print $fhl "[PARTITIONNED_TABLE]\n";
+		foreach my $db (sort @alldbs) {
+			my @p = &get_partitionned_tables($db);
+
+			# Get general partition information
+			foreach my $line (@p) {
+				my ($oid, $content) = split(/[;]/, $line, 2);
+
+				$parts{$oid} = $db;
+				print $fhl "$db=$oid;$content\n";
+			}
+		}
+		# get trigger or rule definition of each partitionned table
+		foreach my $oid (sort keys %parts) {
+			my $db = $parts{$oid};
+			my @implementation = &get_partitionned_implementation($db, $oid);
+
+			print $fhl "[PARTITION_IMPL $db $oid]\n";
+			foreach my $line (@implementation) {
+				print $fhl "$line\n";
+			}
+		}
+		close($fhl);
+	}
+}
+
+sub verify_action
+{
+	# Detect PostgreSQL version
+	my $ret = &fetch_version();
+
+	# Only pgbouncer metrics and configuration
+	if ($ret < 0) {
+		foreach my $m (keys %METRICS_COMMANDS)
+		{
+			delete $METRICS_COMMANDS{$m} if (($m ne 'configuration_stats') && ($m !~ /pgbouncer/));
+		}
+		return $ret;
+	}
+	# Remove some metric collection following the PostgreSQL version.
+	if (!&backend_minimum_version(10, 0)) {
+		delete $METRICS_COMMANDS{'statistics_stats'};
+	}
+	if (!&backend_minimum_version(9, 4)) {
+		delete $METRICS_COMMANDS{'archiver_stats'};
+	}
+	if (!&backend_minimum_version(8, 3)) {
+		delete $METRICS_COMMANDS{'bgwriter_stats'};
+		delete $METRICS_COMMANDS{'pg_buffercache_stats'};
+	}
+	if (!&backend_minimum_version(9, 1)) {
+		delete $METRICS_COMMANDS{'conflict_stats'};
+		delete $METRICS_COMMANDS{'replication_stats'};
+		delete $METRICS_COMMANDS{'unlogged_stats'};
+	}
+	if (!&backend_minimum_version(9, 0)) {
+		delete $METRICS_COMMANDS{'hot_standby_delay'};
+		delete $METRICS_COMMANDS{'user_xact_tables_stats'};
+		delete $METRICS_COMMANDS{'all_xact_tables_stats'};
+		delete $METRICS_COMMANDS{'xact_functions_stats'};
+		delete $METRICS_COMMANDS{'pg_db_role_setting_stats'};
+	}
+	if (!&backend_minimum_version(8, 4)) {
+		delete $METRICS_COMMANDS{'functions_stats'};
+		delete $METRICS_COMMANDS{'redundant_indexes_stats'};
+		delete $METRICS_COMMANDS{'invalid_indexes_stats'};
+		delete $METRICS_COMMANDS{'hash_indexes_stats'};
+		delete $METRICS_COMMANDS{'missing_fkindexes_stats'};
+	}
+	if (!&backend_minimum_version(8, 1)) {
+		delete $METRICS_COMMANDS{'xlog_stats'};
+		delete $METRICS_COMMANDS{'prepared_stats'};
+	}
+	$DB_INFO{pg_stat_statement} = &has_pgstatstatements();
+	if ($NO_STATEMENTS || !$DB_INFO{pg_stat_statement}) {
+		delete $METRICS_COMMANDS{'statements_stats'};
+	}
+	if (!&is_superuser($DBUSER)) {
+		delete $METRICS_COMMANDS{'xlog_stats'};
+	}
+	if ($NOTABLESPACE) {
+		delete $METRICS_COMMANDS{'tablespace_size_stats'};
+	}
+
+	# Check if the connection database has pg_buffercache installed
+	if (!$USE_BUFFERCACHE || !&has_pg_buffercache()) {
+		delete $METRICS_COMMANDS{'database_buffercache_stats'};
+		delete $METRICS_COMMANDS{'database_usagecount_stats'};
+		delete $METRICS_COMMANDS{'relation_buffercache_stats'};
+		delete $METRICS_COMMANDS{'database_isdirty_stats'};
+	}
+
+	return $ret;
+}
+
+sub create_sql_script
+{
+	my $db = shift;
+
+	# Prepare the SQL script
+	my $sql_queries = '';
+	foreach my $type (sort {$a cmp $b} keys %METRICS_COMMANDS)
+	{
+		next if (!$db && $METRICS_COMMANDS{$type}->{repeat});
+		next if ($db && !$METRICS_COMMANDS{$type}->{repeat});
+		next if ($type =~ /^pgbouncer_|configuration_/);
+		next if (($type =~ /^(user|all)_/) && ($type !~ /^$STAT_TYPE/));
+		next if (($#METRICS >= 0) && !grep(/^$type$/, @METRICS));
+		# Look if there is the pg_wait_sampling extension in this database
+		if ($type eq 'waitevent_stats')
+		{
+			next if (!$db || $NO_WAITEVENT);
+			next if (!grep(/^$db=.*pg_wait_sampling/, @extensions));
+		}
+
+		# Get the SQL command to execute for this metric
+		my $sql = $METRICS_COMMANDS{$type}->{command}->();
+		if (!$sql) {
+			return;
+		}
+		my $file_output = $METRICS_COMMANDS{$type}->{output};
+		# Metrics that must be saved at start and end only
+		if ($METRICS_COMMANDS{$type}->{'start-end'}
+			&& -e "$OUT_DIR/$METRICS_COMMANDS{$type}->{output}")
+		{
+			# Add a prefix to end file so that the first file will be preserved
+			$file_output = 'end-' . $METRICS_COMMANDS{$type}->{output};
+			# and this one is overridden each time, we only keep the last one
+			unlink("$OUT_DIR/$file_output");
+		}
+
+		if (&backend_minimum_version(8, 2)) {
+			$sql_queries .= <<EOF
+\\o | cat > /dev/null
+$ALWAYS_SECURE_SEARCH_PATH_SQL
+-- $type
+\\o | cat $FILE_REDIR '$OUT_DIR/$file_output'
+COPY ($sql) TO STDOUT CSV DELIMITER ';';
+
+EOF
+		} else {
+			# 8.1 and lower doesn't support select statement into COPY
+			# we use a temporary table instead
+			$sql_queries .= <<EOF
+\\o | cat > /dev/null
+$ALWAYS_SECURE_SEARCH_PATH_SQL
+-- $type
+\\o | cat $FILE_REDIR '$OUT_DIR/$file_output'
+BEGIN;
+CREATE TEMPORARY TABLE __pgcluu as $sql;
+COPY __pgcluu TO STDOUT CSV DELIMITER ';';
+ROLLBACK;
+
+EOF
+		}
+	}
+
+	if ($sql_queries && &backend_minimum_version(9, 0)) {
+		$sql_queries = "SET application_name TO pgcluu;\n" . $sql_queries;
+	}
+
+	return $sql_queries
+}
+
+sub fetch_version
+{
+	my $save = shift;
+
+	if ($PG_VERSION =~ /^(\d+)/) {
+		$DB_INFO{major} = $1;
+		if ($DB_INFO{major} >= 10) {
+			$DB_INFO{minor} = 0;
+			return "$DB_INFO{major}.0";
+		} elsif ($PG_VERSION =~ /^(\d+)\.(\d+)/) {
+			$DB_INFO{major} = $1;
+			$DB_INFO{minor} = $2;
+			return "$1.$2";
+		}
+	}
+
+	return -1 if ($NO_DATABASE);
+
+	my $pg_ver = `echo "SELECT version();" | $PSQL_PROG 2>&1`;
+	if ($? != 0) {
+		# Only stop here if there's no pgbouncer querying
+		if (!$PGBOUNCER_ARGS) {
+			unlink_pid_and_exit("FATAL: psql error. $pg_ver", 0);
+		} else {
+			return -1;
+		}
+	}
+	chomp($pg_ver);
+
+	if ($pg_ver =~ /^(?:PostgreSQL|EnterpriseDB) (\d+)/) {
+		$DB_INFO{major} = $1;
+		if ($DB_INFO{major} >= 10) {
+			$DB_INFO{minor} = 0;
+		} elsif ($pg_ver =~ /^(?:PostgreSQL|EnterpriseDB) (\d+)\.(\d+)/) {
+			$DB_INFO{major} = $1;
+			$DB_INFO{minor} = $2;
+		}
+	} elsif ($pg_ver =~ /(\d+)\.(\d+)(\.\d+)?/) {
+		$DB_INFO{major} = $1;
+		$DB_INFO{minor} = $2;
+		if ($DB_INFO{major} >= 10) {
+			$DB_INFO{minor} = 0;
+		} else {
+			$DB_INFO{minor} = $2;
+		}
+	}
+
+	if ($save) {
+		my $fhl = IO::File->new("$OUT_DIR/sysinfo.txt", 'a');
+		if (not defined $fhl) {
+			&dprint("FATAL: can not write into file $OUT_DIR/sysinfo.txt\n");
+			unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/sysinfo.txt, $!", 1);
+		}
+		print $fhl "[PGVERSION]\n";
+		print $fhl "$pg_ver\n";
+		close($fhl);
+	}
+
+	return "$DB_INFO{major}.$DB_INFO{minor}";
+}
+
+####
+# Retrieve installed extension for a given database.
+####
+sub get_extensions
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my @db_extension = `echo "SELECT extname||'-'||extversion FROM pg_extension;" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_extension);
+
+	return @db_extension;
+}
+
+####
+# Get the list of database that are not template and that allow connction
+####
+sub get_databases
+{
+
+	my @dbs = `echo "SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn;" | $PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@dbs);
+
+	return @dbs;
+}
+
+####
+# Get postmater uptime
+####
+sub get_uptime
+{
+	my $save = shift;
+
+	my $uptime = `echo "SELECT pg_postmaster_start_time();" | $PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp($uptime);
+
+	if ($save) {
+		my $fhl = IO::File->new("$OUT_DIR/sysinfo.txt", 'a');
+		if (not defined $fhl) {
+			&dprint("FATAL: can not write into file $OUT_DIR/sysinfo.txt\n");
+			unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/sysinfo.txt, $!", 1);
+		}
+		print $fhl "[PGUPTIME]\n";
+		print $fhl "$uptime\n";
+		close($fhl);
+	}
+	return $uptime;
+}
+
+
+####
+# Retrieve schemas for a given database.
+####
+sub get_schemas
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my @db_schema = `echo "SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' ORDER BY 1" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_schema);
+
+	return @db_schema;
+}
+
+####
+# Retrieve JSON vs JSONB columns for a given database.
+####
+sub get_json_cols
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my @db_json = `echo "SELECT c.relname||'.'||a.attname FROM pg_attribute a JOIN pg_class c ON (a.attrelid=c.relfilenode) WHERE a.atttypid = 114 ORDER BY 1" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_json);
+
+	return @db_json;
+}
+
+
+####
+## Retrieve partitionned tables from a given database.
+####
+sub get_partitionned_tables
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	# Assume that inherited tables having check constraints are partitions
+	my $sql = sprintf(
+		  "SELECT p.oid, quote_ident(pn.nspname) || '.' || quote_ident(p.relname),"
+		. " quote_ident(cn.nspname) || '.' || quote_ident(c.relname), %s,"
+		. " CASE WHEN t.oid IS NOT NULL THEN 'Trigger' WHEN r.oid IS NOT NULL THEN 'Rule' ELSE 'Unknown' END,"
+		. " count(*) OVER (PARTITION BY p.oid)"
+		. " FROM pg_inherits i"
+		. " JOIN pg_class p ON p.oid = i.inhparent"
+		. " JOIN pg_namespace pn ON pn.oid = p.relnamespace"
+		. " JOIN pg_class c ON c.oid = i.inhrelid"
+		. " JOIN pg_namespace cn ON cn.oid = p.relnamespace"
+		. " JOIN pg_constraint con ON con.conrelid= c.oid AND con.contype = 'c'"
+		. " LEFT JOIN pg_trigger t ON t.tgrelid = p.oid"
+		. " LEFT JOIN pg_rewrite r ON r.ev_class = p.oid",
+		&backend_minimum_version(12, 0) ? "pg_get_constraintdef(con.oid)" : "con.consrc"
+		);
+
+	my @db_parttables = `echo "$ALWAYS_SECURE_SEARCH_PATH_SQL $sql" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_parttables);
+
+	# Return non empty lines
+	return grep(!/^\s*$/s, @db_parttables);
+}
+
+###
+# Retrieve trigger or rules of a specific partitionned table from a given database.
+###
+sub get_partitionned_implementation
+{
+	my $database = shift;
+	my $oid = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my $sql = "SELECT DISTINCT CASE WHEN pro.oid IS NOT NULL THEN pro.prosrc"
+		. "   WHEN r.oid IS NOT NULL THEN pg_get_ruledef(r.oid)"
+		. "   ELSE 'Unknown' END"
+		. " FROM pg_inherits i"
+		. " JOIN pg_class p ON p.oid = i.inhparent"
+		. " JOIN pg_namespace pn ON pn.oid = p.relnamespace"
+		. " LEFT JOIN pg_trigger t ON t.tgrelid = p.oid"
+		. " LEFT JOIN pg_proc pro ON pro.oid = t.tgfoid"
+		. " LEFT JOIN pg_rewrite r ON r.ev_class = p.oid"
+		. " WHERE p.oid = $oid";
+
+	my @db_parttables = `echo "$sql" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_parttables);
+
+	# Return non empty lines
+	return grep(!/^\s*$/s, @db_parttables);
+}
+
+####
+# Check if the database have the pg_buffercache extension
+####
+sub has_pg_buffercache
+{
+
+	my $hasit = `echo "SELECT proname FROM pg_proc WHERE proname = 'pg_buffercache_pages';" | $PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp($hasit);
+	if (!$hasit) {
+		&dprint("WARNING: you ask for pg_buffercache reports but pg_buffercache extention is not installed in the connection database. See -d option to set the startup connection database.\n");
+	}
+
+	return $hasit;
+}
+
+
+####
+# Check if the database have the pg_stat_statements extension
+####
+sub has_pgstatstatements
+{
+
+	my $hasit = ` echo "SELECT n.nspname||'.'||p.proname FROM pg_proc p, pg_namespace n, pg_settings s WHERE p.proname='pg_stat_statements' AND p.pronamespace=n.oid AND s.name='shared_preload_libraries' AND s.setting LIKE '%pg_stat_statements%';" | $PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp($hasit);
+
+	return $hasit;
+}
+
+sub is_superuser
+{
+	my $usr = shift;
+
+	# Assume it is superuser per default. In any case this will raise a psql error.
+	return 1 if (!$usr);
+
+	$DB_INFO{is_superuser} = `echo "SELECT 1 FROM pg_user WHERE usename='$usr' AND usesuper" | $PSQL_PROG`;
+	chomp($DB_INFO{is_superuser});
+	# If not super user look if the user has pg_monitor role
+	if (!$DB_INFO{is_superuser} && &backend_minimum_version(10, 0))
+	{
+		$DB_INFO{is_superuser} = `echo "SELECT 1 from pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON (m.member = r.oid) WHERE m.member='$usr'::regrole AND m.roleid = 'pg_monitor'::regrole" | $PSQL_PROG`;
+		chomp($DB_INFO{is_superuser});
+	}
+
+	return $DB_INFO{is_superuser};
+
+}
+
+sub sysstat_version
+{
+	my $ver = 0;
+	if (!$DISABLE_SAR) {
+		my $ver_command = "LC_ALL=C $SAR_PROG -V 2>&1";
+		$ver_command = $sshcmd . ' "' . $ver_command . '"' if ($sshcmd) ;
+		$ver = `$ver_command | grep "sysstat version"`;
+		if ($?) {
+			&dprint("ERROR: $SAR_PROG execution failure: $!\n");
+			$ver = 0;
+		} elsif ($ver =~ m!^sysstat version ([\.\d]+)!) {
+			$ver = $1;
+		}
+	}
+	return $ver;
+}
+
+sub grab_os_information
+{
+	my $out_dir = shift();
+
+	# Look at CPU informations
+	my $cmd = 'cat /proc/cpuinfo 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @cpuinfo = `$cmd | grep -E "model name|cpu MHz|cache size|cpu cores|processor"`;
+	# Look at kernel informations
+	$cmd = 'uname -a  2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my $kernel_info = `$cmd`;
+	# Look at memory informations
+	$cmd = 'cat /proc/meminfo 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @meminfo = `$cmd`;
+	if ($out_dir) {
+		my ($commit_limit) = grep(/^CommitLimit:/, @meminfo);
+		my ($commit_as) = grep(/^Committed_AS:/, @meminfo);
+		if ($commit_limit and $commit_as ne '' and open(my $outf, '>>', "$out_dir/commit_memory.csv")) {
+			my $cdate = time();
+			$commit_limit =~ s/[^\d]+(\d+)[^\d]+/$1/;
+			$commit_as =~ s/[^\d]+(\d+)[^\d]+/$1/;
+			print $outf "$cdate;$commit_limit;$commit_as\n";
+			close($outf);
+		}
+	}
+	# Look at filesystem informations
+	$cmd = 'df -h | grep -v "/dev/loop" 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @dfinfo = `$cmd`;
+	# Mount informations
+	$cmd = 'mount -l  | grep -v "squashfs" 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @mountinfo = `$cmd`;
+	# Fstab informations
+	$cmd = 'cat /etc/fstab 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @fstabinfo = `$cmd | grep -v "^#"`;
+	# PCI information
+	$cmd = 'lspci 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @pciinfo = `$cmd`;
+	# Release informations
+	$cmd = 'cat /etc/*release 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @releaseinfo = `$cmd`;
+	# Process list
+	$cmd = 'ps -faux 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @pslist = `$cmd`;
+	# System kernel tuning parameters
+	$cmd = '/sbin/sysctl -a 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @system = `$cmd | grep -E "vm.nr_hugepages |vm.nr_overcommit_hugepages|vm.overcommit|vm.dirty_.*(ratio|bytes|kbytes)|swappiness|zone_reclaim_mode|shmmax|shmall|sched_autogroup_enabled|sched_migration_cost|keepalive"`;
+
+	my $fhl = IO::File->new("$OUT_DIR/sysinfo.txt.tmp", 'a');
+	if (not defined $fhl) {
+		&dprint("FATAL: can not write into file $OUT_DIR/sysinfo.txt\n");
+		unlink_pid_and_exit("FATAL: can not write into file $OUT_DIR/sysinfo.txt, $!", 1);
+	}
+	$cmd = 'cat /sys/kernel/mm/*transparent_hugepage/enabled 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my $ret = `$cmd`;
+	if ($ret ne '') {
+		push(@system, "/sys/kernel/mm/transparent_hugepage/enabled: " . $ret);
+		$cmd = 'cat /sys/kernel/mm/*transparent_hugepage/defrag 2>/dev/null';
+		$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+		$ret = `$cmd`;
+		push(@system, "/sys/kernel/mm/transparent_hugepage/defrag: " . $ret);
+		$cmd = 'cat /sys/kernel/mm/*transparent_hugepage/khugepaged/defrag 2>/dev/null';
+		$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+		$ret = `$cmd`;
+		push(@system, "/sys/kernel/mm/transparent_hugepage/khugepaged/defrag: " . $ret);
+	}
+	$cmd = "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null | grep -E 'performance|powersave|userspace|ondemand|conservative|schedutil'";
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	$ret = `$cmd`;
+	if ($ret ne '') {
+		push(@system, "scaling_governor: " . $ret);
+	}
+	# Look at block devices informations
+	my @devices;
+	$cmd = 'ls /sys/block/ | grep -v "^loop"';
+	foreach my $device ( `$cmd` ) {
+		my @row;
+		chomp($device);
+		push(@row , 'Device : ' . $device . "\n");
+		# Fetch scheduler setting
+		$cmd = 'cat /sys/block/' . $device . '/queue/scheduler';
+		push(@row , '/queue/scheduler : ' . `$cmd`);
+		# Fetch add_random setting
+		$cmd = 'cat /sys/block/' . $device . '/queue/add_random';
+		push(@row , '/queue/add_random : ' . `$cmd`);
+		# Fetch rq_affinity setting
+		$cmd = 'cat /sys/block/' . $device . '/queue/rq_affinity';
+		push(@row , '/queue/rq_affinity : ' . `$cmd`);
+		# Fetch rotational setting
+		$cmd = 'cat /sys/block/' . $device . '/queue/rotational';
+		push(@row , '/queue/rotational : ' . `$cmd`);
+		push(@devices, @row);
+	}
+	print $fhl "[DEVICES]\n";
+	print $fhl @devices;
+	# Look at uptime informations
+	$cmd = 'uptime 2>/dev/null';
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my $uptime = `$cmd`;
+	# Get crontab information
+	$cmd = "crontab -u $CRONUSER -l 2>/dev/null";
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	my @crontab = `$cmd`;
+	# Get package installation information
+	my @installation = ();
+
+	# Autodetect package listing command to use
+	if (!$PKG_LIST_PROG) {
+		my @ret = `which rpm dpkg 2>/dev/null`;
+		chomp(@ret);
+		foreach my $c (@ret) {
+			$PKG_LIST_PROG = "$c -qa " if ($c =~ /\/rpm/);
+			$PKG_LIST_PROG = "$c -l " if ($c =~ /\/dpkg/);
+		}
+	}
+	$cmd = "$PKG_LIST_PROG 2>/dev/null | grep postgres";
+	$cmd = $sshcmd . ' "' . $cmd . "\"" if ($sshcmd);
+	@installation = `$cmd`;
+
+	print $fhl "[CPU]\n";
+	print $fhl @cpuinfo;
+	print $fhl "[KERNEL]\n";
+	print $fhl $kernel_info;
+	print $fhl "[UPTIME]\n";
+	print $fhl $uptime;
+	print $fhl "[MEMORY]\n";
+	print $fhl @meminfo;
+	print $fhl "[DF]\n";
+	print $fhl @dfinfo;
+	print $fhl "[MOUNT]\n";
+	print $fhl @mountinfo;
+	print $fhl "[FSTAB]\n";
+	print $fhl @fstabinfo;
+	print $fhl "[PCI]\n";
+	print $fhl @pciinfo;
+	print $fhl "[RELEASE]\n";
+	print $fhl @releaseinfo;
+	print $fhl "[SYSTEM]\n";
+	print $fhl @system;
+	print $fhl "[PROCESS]\n";
+	print $fhl @pslist;
+	print $fhl "[CRONTAB]\n";
+	print $fhl @crontab;
+	print $fhl "[INSTALLATION]\n";
+	print $fhl @installation;
+
+	close($fhl);
+}
+
+sub usage
+{
+    print qq{
+usage: $PROGRAM [options] output_dir
+
+	output_dir: full path to directory where pgcluu_collectd will
+		    store statistics.
+
+options:
+
+  -B, --enable-buffercache enable buffercache statistics if pg_buffercache
+			   extension is installed.
+  -c, --capture            create a snapshot of the PostgreSQL installation
+                           into tmp/pgcluu_capture.tar.gz.
+  -C, --end-counter=NUM    terminate program after NUM reports.
+  -d, --dbname=DATABASE    database name to connect to. Default to current user.
+  -D, --daemonize          detach from console and enter in daemon mode.
+  -E, --end-after=NUM      self terminate the program after a given number of
+                           seconds. Can be written: 7200 or 120M or 2H, for
+			   days use 7D for example to stop collecting data
+			   after seven days.
+  -f, --pid-file=FILE      path to pid file. Default: $PIDFILE.
+  -h, --host=HOSTNAME      database server host or socket directory
+  -i, --interval=NUM       time to wait between runs
+  -k, --kill		   stop current $PROGRAM running daemon.
+  -m, --metric=METRIC      set a coma separated list of metrics to perform.
+  -M, --max-size=SIZE      self terminate program when the size of the output
+                           directory exceed a given size. Can be written: 2GB
+                           or 2000MB.
+  -p, --port=PORT          database port(s) to connect to. Defaults to 5432.
+  -P, --psql=BIN           path to the psql command. Default: $PSQL_PROG.
+  -Q, --no-statement       do not collect statistics from pg_stat_statements.
+  -r, --rotate-daily       force daily rotation of data files.
+  -R, --rotate-hourly      force hourly rotation of data files.
+  -s, --sar=BIN            path to sar sysstat command. Default: $SAR_PROG.
+  -S, --disable-sar        disable collect of system statistics with sar.
+  -t, --lock-timeout=NUM   terminate metric SQL query after N second in case it
+                           wait too much time because of a lock. Default: 3
+  -T, --no-tablespace      disable lookup at tablespace when the connect user
+			   is not superuser to avoid printing an error message.
+  -U, --dbuser=USERNAME    database user to connect as. Default to current user.
+  -v, --verbose            Print out debug informations.
+  -V, --version            Show pgcluu_collectd version and exit.
+  -w, --no-waitevent       don't collect wait event stats from pg_wait_sampling.
+  -W, --password=pass      database password.
+  -z, --compress           force compression of rotated data files.
+  --included-db=DATABASE   collect statistics only for those databases present
+                           in a comma separated list of database names.
+  --list-metric            list available metrics actions that can be performed.
+  --sysinfo                get operating system infos and exit (sysinfo.txt).
+  --no-sysinfo             do not collect operating system information at all.
+  --no-database            do not collect database statistics at all.
+  --pgbouncer-args=OPTIONS Option to used to connect to the pgbouncer system
+			   database. Ex: -p 6432 -U postgres -h 192.168.1.100
+                           You must at least give one parameter to enable
+                           pgbouncer monitoring.
+  --sar-file=FILE          path to sar output data file for sysstat stats
+                           Default to output_dir/sar_stats.dat.
+  --stat-type all|user     Set stats tables to read. Values: 'all' or 'user' to
+			   look at pg_stat_(all|user) tables. Default: user.
+  --pgversion X.Y          force the PostgreSQL version to the given value.
+  --pgservice NAME         Name of service inside of the pg_service.conf file.
+  --exclude-time RANGE     exclude a laps of time by giving the start and end
+			   hours.
+  --cron-user=USERNAME     collect crontab settings for the given username (in
+                           this case pgcluu_collectd need to be run as root).
+                           Default is to use USERNAME environment variable or
+                           postgres when it is not defined.
+  --package-list=CMD       command to list PostgreSQL packages. Default is to
+                           autodetect package type and using command 'rpm -qa'
+                           or 'dpkg -l'. If you have an other system you can
+                           set a custom command. A filter on keyword 'postgres'
+			   is appended to the command: ' | grep postgres'.
+  --retention NDAYS        number of rolling days to keep in data directory in
+                           incremental mode. Default is to store indefinitely.
+  --help                   print usage
+
+Use those options to execute sar on the remote host defined by the -h option,
+otherwise it will be executed locally:
+
+  --enable-ssh             activate the use of ssh to run sysstat remotely.
+  --ssh-program ssh        path to the ssh program to use. Default: ssh.
+  --ssh-user username      connection login name. Default to running user.
+  --ssh-identity file      path to the identity file to use.
+  --ssh-timeout second     timeout to ssh connection failure. Default 10.
+  --ssh-options  options   list of -o options to use for the ssh connection.
+			   Options always used:
+			     -o ConnectTimeout=\$ssh_timeout
+			     -o PreferredAuthentications=hostbased,publickey
+
+For example, as postgres user to monitor locally a full PostgreSQL cluster:
+
+  mkdir /tmp/stat_db1/
+  pgcluu_collectd -D -i 60 /tmp/stat_db1/
+
+to collect statistics from pgbouncer too, and limit database statistics to a
+single database:
+
+  pgcluu_collectd -D -i 60 /tmp/stat_db1/ -h 10.10.1.1 -U postgres -d mydb \
+		--pgbouncer-args='-p 5342'
+
+to disable statistics collect between 22:30 and 06:30 the next day:
+
+  pgcluu_collectd -D -i 60 /tmp/stat_db1/ --exclude-time "22:30-06:30"
+
+to collect statistics from a remote server:
+
+    pgcluu_collectd -D -i 60 /tmp/statdb1/ -h 10.0.0.1 -U postgres --disable-sar
+
+the same but with collecting system statistics using remote sar calls:
+
+  pgcluu_collectd -D -i 60 /tmp/statdb1/ -h 10.0.0.1 -U postgres --enable-ssh \
+	--ssh-user postgres --ssh-identity /var/lib/postgresql/.ssh/id_rsa.pub
+
+You may need a .pgpass and be able to establish passwordless ssh connections to
+be able to collect statistics from remote hosts.
+
+Then after some time and activities on the database, stop the daemon as follow:
+
+  pgcluu_collectd -k
+
+or by sending sigterm to the pgcluu_collectd's pid.
+
+You can run the collector in incremental mode using a daily or a hourly
+statistics rotation:
+
+  pgcluu_collectd -D -i 60 /tmp/stat_db1/ --rotate-daily
+
+On a server with huge activity you may want to use --rotate-hourly and
+compression mode with --compress option. If you have limited disk space you
+can restrict the retention time of statistics files using option --retention
+with the storage day limit.
+
+};
+    exit 1;
+}
+
+sub dprint
+{
+	foreach (@_) {
+		next if (/^DEBUG:/s && !$DEBUG);
+		print "$_"
+	}
+}
+
+# Compare given major and minor numbers to the one of the connected server
+sub backend_minimum_version
+{
+	my ($major, $minor) = @_;
+
+	return if ($major eq '');
+	return if ($minor eq '');
+
+	return ($DB_INFO{major} > $major) || (($DB_INFO{major} == $major) && ($DB_INFO{minor} >= $minor));
+}
+
+sub dump_pgstatactivity
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), datid, datname, %s, " .
+		"usesysid, usename, %s%s%s%s%s" .
+		"date_trunc('seconds', query_start) AS query_start, " .
+		"%s%s%s " .
+		"FROM pg_stat_activity %s" .
+		"ORDER BY %s",
+		&backend_minimum_version(9, 2) ? "pid" : "procpid",
+		&backend_minimum_version(9, 0) ? "application_name, " : "",
+		&backend_minimum_version(8, 1) ? "client_addr, " : "",
+		&backend_minimum_version(9, 1) ? "client_hostname, " : "",
+		&backend_minimum_version(8, 1) ? "client_port, date_trunc('seconds', backend_start) AS backend_start, " : "",
+		&backend_minimum_version(8, 3) ? "date_trunc('seconds', xact_start) AS xact_start, " : "",
+		&backend_minimum_version(9, 2) ? "state_change, " : "",
+		&backend_minimum_version(8, 2) ? "waiting, " : "",
+		&backend_minimum_version(9, 2) ? "query" : "current_query",
+		&backend_minimum_version(9, 0) ? "WHERE application_name != 'pgcluu' " : "",
+		&backend_minimum_version(9, 2) ? "pid" : "procpid"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatbgwriter
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), checkpoints_timed, " .
+		"checkpoints_req, %sbuffers_checkpoint, buffers_clean, " .
+		"maxwritten_clean, buffers_backend, %sbuffers_alloc%s " .
+		"FROM pg_stat_bgwriter ",
+		&backend_minimum_version(9, 2) ? "checkpoint_write_time, checkpoint_sync_time, " : "",
+		&backend_minimum_version(9, 1) ? "buffers_backend_fsync, " : "",
+		&backend_minimum_version(9, 1) ? ", date_trunc('seconds', stats_reset) AS stats_reset " : ""
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatdatabase
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), datid, datname, " .
+		"numbackends, xact_commit, xact_rollback, blks_read, blks_hit" .
+		"%s%s%s " .
+		"FROM pg_stat_database " .
+		"ORDER BY datname",
+		&backend_minimum_version(8, 3) ? ", tup_returned, tup_fetched, tup_inserted, tup_updated, tup_deleted" : "",
+		&backend_minimum_version(9, 1) ? ", conflicts, date_trunc('seconds', stats_reset) AS stats_reset" : "",
+		&backend_minimum_version(9, 2) ? ", temp_files, temp_bytes, deadlocks, blk_read_time, blk_write_time" : ""
+	);
+
+	return $sql;
+}
+
+sub dump_pgtablespace_size
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), spcname, " .
+		"pg_tablespace_size(spcname), " .
+		"CASE WHEN %s = '' THEN CASE WHEN spcname = 'pg_default' THEN (select setting from pg_settings where name='data_directory')||'/base' ELSE (select setting from pg_settings where name='data_directory')||'/global' END ELSE %s END as tablespace_location " .
+		"FROM pg_tablespace " .
+		"ORDER BY spcname",
+		&backend_minimum_version(9, 2) ? "pg_tablespace_location(oid)" : "spclocation",
+		&backend_minimum_version(9, 2) ? "pg_tablespace_location(oid)" : "spclocation"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatdatabaseconflicts
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), * " .
+		"FROM pg_stat_database_conflicts " .
+		"ORDER BY datname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatreplication
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), %s, usesysid, usename, " .
+		"application_name, client_addr, client_hostname, client_port, " .
+		"date_trunc('seconds', backend_start) AS backend_start, state, " .
+		"(CASE WHEN pg_is_in_recovery() THEN NULL ELSE %s END) AS master_location, " .
+		"%s, %s, %s, %s, " .
+		"sync_priority, " .
+		"sync_state " .
+		"FROM pg_stat_replication " .
+		"ORDER BY application_name",
+		&backend_minimum_version(9, 2) ? "pid" : "procpid",
+		&backend_minimum_version(10, 0) ? "pg_current_wal_lsn()" : "pg_current_xlog_location()",
+		&backend_minimum_version(10, 0) ? "sent_lsn" : "sent_location",
+		&backend_minimum_version(10, 0) ? "write_lsn" : "write_location",
+		&backend_minimum_version(10, 0) ? "flush_lsn" : "flush_location",
+		&backend_minimum_version(10, 0) ? "replay_lsn" : "replay_location"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstattables_user { return dump_pgstattables('user'); };
+
+sub dump_pgstattables
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), relid, schemaname, relname, " .
+		"seq_scan, seq_tup_read, idx_scan, idx_tup_fetch, n_tup_ins, " .
+		"n_tup_upd, n_tup_del" .
+		"%s" .
+		"%s" .
+		"%s" .
+		" FROM pg_stat_${type}_tables " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, relname",
+		&backend_minimum_version(8, 3) ? ", n_tup_hot_upd, n_live_tup, n_dead_tup" : "",
+		&backend_minimum_version(8, 2) ? ", date_trunc('seconds', last_vacuum) AS last_vacuum, date_trunc('seconds', last_autovacuum) AS last_autovacuum, date_trunc('seconds',last_analyze) AS last_analyze, date_trunc('seconds',last_autoanalyze) AS last_autoanalyze" : "",
+		&backend_minimum_version(9, 1) ? ", vacuum_count, autovacuum_count, analyze_count, autoanalyze_count" : ""
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatindexes_user { return dump_pgstatindexes('user'); };
+
+sub dump_pgstatindexes
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), * " .
+		"FROM pg_stat_${type}_indexes " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, relname, indexrelname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatiotables_user { return dump_pgstatiotables('user'); };
+
+sub dump_pgstatiotables
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), * " .
+		"FROM pg_statio_${type}_tables " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, relname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatioindexes_user { return dump_pgstatioindexes('user'); };
+
+sub dump_pgstatioindexes
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), * " .
+		"FROM pg_statio_${type}_indexes " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, relname, indexrelname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatiosequences_user { return dump_pgstatiosequences('user'); };
+
+sub dump_pgstatiosequences
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), * " .
+		"FROM pg_statio_${type}_sequences " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, relname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatuserfunctions
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), * " .
+		"FROM pg_stat_user_functions " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY schemaname, funcname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgclass_size
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), n.nspname, c.relname, c.relkind, c.reltuples, c.relpages%s " .
+		"FROM pg_class c, pg_namespace n " .
+		"WHERE n.oid=c.relnamespace AND n.nspname <> 'information_schema' AND n.nspname <> 'pg_catalog' " .
+		"ORDER BY n.nspname, c.relname",
+		($CAPTURE && &backend_minimum_version(8, 1)) ? ", pg_relation_size(c.oid)" : ""
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatstatements
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), r.rolname, d.datname, " .
+		"regexp_replace(regexp_replace(query, E'[ \\n]+', ' ', 'g'), E';', '#SMCLN#', 'g'), calls, %s, rows, " .
+		"shared_blks_hit, shared_blks_read, shared_blks_written, " .
+		"local_blks_hit, local_blks_read, local_blks_written, " .
+		"temp_blks_read, temp_blks_written " .
+		"FROM $DB_INFO{pg_stat_statement} q, pg_database d, pg_roles r " .
+		"WHERE q.userid=r.oid and q.dbid=d.oid " .
+		"ORDER BY r.rolname, d.datname",
+		&backend_minimum_version(13, 0) ? "(total_plan_time + total_exec_time) as total_time " : "total_time"
+	);
+
+	return $sql;
+}
+
+sub dump_pgwaitsampling
+{
+
+	my $sql = "SELECT date_trunc('seconds', now()), current_database(), " .
+			"event_type, event, SUM(count) " .
+			"FROM public.pg_wait_sampling_profile " .
+			"WHERE event IS NOT NULL " .
+			"GROUP BY event_type, event";
+
+	return $sql;
+}
+
+
+sub dump_xlog_stat
+{
+
+	my $sql = '';
+
+	if (&backend_minimum_version(8, 4)) {
+		$sql = sprintf(
+			"SELECT date_trunc('seconds', now()), count(*) AS num_file, " .
+			"%s AS current, " .
+			"sum(is_recycled::int) AS is_recycled, " .
+			"sum((NOT is_recycled)::int) AS written, " .
+			"%s " .
+			"FROM ( " .
+			"SELECT file > first_value(file) OVER w AS is_recycled " .
+			"%s " .
+			"FROM %s as file " .
+			"WHERE %s ~ '^[0-9A-F]{24}\$' " .
+			"WINDOW w AS ( " .
+			"ORDER BY %s.modification " .
+			"DESC " .
+			") " .
+			") AS t " .
+			"GROUP BY 6 ",
+			&backend_minimum_version(10, 0) ? "pg_walfile_name(pg_current_wal_lsn())" : "pg_xlogfile_name(pg_current_xlog_location())",
+			&backend_minimum_version(9, 5) ? "max_wal" : &backend_minimum_version(9, 0) ? "CASE WHEN max_wal1 > max_wal2 THEN max_wal1 ELSE max_wal2 END AS max_wal" : "1 + ( current_setting('checkpoint_segments')::float4 * ( 2 + current_setting('checkpoint_completion_target')::float4 )) AS max_wal",
+			&backend_minimum_version(9, 5) ? ",(select setting from pg_settings where name = 'max_wal_size')::float4 AS max_wal" : &backend_minimum_version(9, 0) ? ",1 + ( current_setting('checkpoint_segments')::float4 * ( 2 + current_setting('checkpoint_completion_target')::float4 )) AS max_wal1, 1 + current_setting('wal_keep_segments')::float4 + current_setting('checkpoint_segments')::float4 AS max_wal2" : "",
+			&backend_minimum_version(10, 0) ? "pg_ls_waldir()" : "pg_ls_dir('pg_xlog')",
+			&backend_minimum_version(10, 0) ? "file.name" : "file",
+			&backend_minimum_version(10, 0) ? "file" : "(pg_stat_file('pg_xlog/'||file))" 
+		);
+	} else {
+		$sql = sprintf(
+			"SELECT date_trunc('seconds', now()), count(*) AS num_file, " .
+			"%s AS current, " .
+			"sum(recycled::int) AS is_recycled, " .
+			"sum((NOT recycled)::int) AS written, " .
+			"%s " .
+			"FROM ( " .
+			"SELECT file, file > ( " .
+			"SELECT s.f " .
+			"FROM %s AS s(f) " .
+			"ORDER BY %s.modification DESC " .
+			"LIMIT 1 " .
+			") AS recycled " .
+			"FROM %s AS file " .
+			"WHERE %s ~ '^[0-9A-F]{24}\$' " .
+			") AS t  ",
+			&backend_minimum_version(10, 0) ? "pg_walfile_name(pg_current_wal_lsn())" : &backend_minimum_version(8, 2) ? "pg_xlogfile_name(pg_current_xlog_location())" : "'-'::text",
+			&backend_minimum_version(8, 3) ? "1 + ( current_setting('checkpoint_segments')::float4 * ( 2 + current_setting('checkpoint_completion_target')::float4 ))" : "1 + (current_setting('checkpoint_segments')::integer * 2)",
+			&backend_minimum_version(10, 0) ? "pg_ls_waldir()" : "pg_ls_dir('pg_xlog')",
+			&backend_minimum_version(10, 0) ? "file" : "(pg_stat_file('pg_xlog/'||file))" ,
+			&backend_minimum_version(10, 0) ? "pg_ls_waldir()" : "pg_ls_dir('pg_xlog')",
+			&backend_minimum_version(10, 0) ? "file.name" : "file"
+		);
+	}
+
+	return $sql;
+}
+
+sub dump_pgdatabase_size
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), datid, datname, pg_database_size(datid) AS size " .
+		"FROM pg_stat_database WHERE datid > 0" .
+		"ORDER BY datname"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatconnections
+{
+
+	my $waiting = '';
+	if (&backend_minimum_version(9, 6)) {
+		#$waiting = "coalesce(SUM((wait_event_type IS NOT NULL)::integer), 0)";
+		$waiting = "coalesce(SUM((wait_event_type='Lock' AND wait_event='tuple')::integer), 0)";
+	} else {
+		&backend_minimum_version(8, 2) ? $waiting = "coalesce(SUM(waiting::integer), 0)" : $waiting = "0::integer";
+	}
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), COUNT(*) AS total, coalesce(SUM((%s)::integer), 0) AS active, " .
+		"%s AS waiting, " .
+		"coalesce(SUM((%s)::integer), 0) AS idle_in_xact, pg_database.datname AS datname " .
+		"FROM pg_stat_activity JOIN pg_database ON (pg_database.oid=pg_stat_activity.datid) " .
+		"WHERE %s <> pg_backend_pid() GROUP BY pg_database.datname" ,
+		&backend_minimum_version(9, 2) ? "state NOT LIKE 'idle%'" : "current_query NOT IN ('<IDLE>','<IDLE> in transaction')",
+		$waiting,
+		&backend_minimum_version(9, 2) ? "state = 'idle in transaction'" : "current_query = '<IDLE> in transaction'",
+		&backend_minimum_version(9, 2) ? "pid" : "procpid" ,
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatlocktypes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), 'lock_type'::text as label, " .
+		"locktype, count(locktype) as count " .
+		"FROM pg_locks GROUP BY locktype"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatlockmodes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), 'lock_mode'::text as label, " .
+		"mode, count(mode) as count " .
+		"FROM pg_locks GROUP BY mode"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatlockgranted
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), 'lock_granted'::text as label, " .
+		"granted, count(granted) as count " .
+		"FROM pg_locks GROUP BY granted"
+	);
+
+	return $sql;
+}
+
+sub dump_pgbouncerpoolstats
+{
+
+	my $sql = sprintf(
+		"SHOW POOLS"
+	);
+
+	return $sql;
+}
+
+sub dump_pgbouncerquerystats
+{
+
+	my $sql = sprintf(
+		"SHOW STATS"
+	);
+
+	return $sql;
+}
+
+
+
+sub get_current_timestamp
+{
+
+	my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
+
+	$year += 1900;
+	$mon++;
+
+	return $year . '-' . sprintf("%02d", $mon) . '-' . sprintf("%02d", $mday) . ' ' .
+		 sprintf("%02d", $hour) . ':' . sprintf("%02d", $min) . ':' . sprintf("%02d", $sec);
+}
+
+sub dump_pgstatxactuserfunctions
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), * " .
+		"FROM pg_stat_xact_user_functions " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY 3, 4"
+	);
+
+	return $sql;
+}
+
+sub dump_pgstatxacttables_user { return dump_pgstatxacttables('user'); };
+
+sub dump_pgstatxacttables
+{
+	my $type = shift;
+
+	$type ||= 'all';
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), * " .
+		"FROM pg_stat_xact_${type}_tables " .
+		"WHERE schemaname <> 'information_schema' " .
+		"ORDER BY 3, 4"
+	);
+
+	return $sql;
+}
+
+sub get_proc_name
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my @db_proc = `echo "SELECT n.nspname||'.'||p.proname FROM pg_proc p, pg_namespace n WHERE p.pronamespace=n.oid AND n.nspname NOT IN ('pg_catalog', 'information_schema');" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@db_proc);
+
+	return @db_proc;
+
+}
+
+sub set_local_psql_command
+{
+	my $database = shift;
+
+	my $local_psql_prog = $PSQL_PROG;
+
+	$local_psql_prog =~ s/-d\s*[^\s]+//;
+	if ($database !~ /^[a-z0-9\_\-]+$/i) {
+		$local_psql_prog .= " -d '$database'";
+	} else {
+		$local_psql_prog .= " -d $database";
+	}
+
+	return $local_psql_prog;
+}
+
+sub get_proc_count
+{
+	my $database = shift;
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my $db_proc = `echo "SELECT count(p.proname) FROM pg_proc p, pg_namespace n WHERE p.pronamespace=n.oid AND n.nspname NOT IN ('pg_catalog', 'information_schema');" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp($db_proc);
+
+	return $db_proc;
+}
+
+
+####
+# Retrieve user triggers count for a given database.
+####
+sub get_triggers
+{
+	my $database = shift;
+
+	# we can only detect internal triggers since pg 9.0
+	return 0 if (! &backend_minimum_version(9,0));
+
+	my $LOCAL_PSQL_PROG = &set_local_psql_command($database);
+
+	my $db_trigger = `echo "SELECT count(tgname) FROM pg_trigger WHERE NOT tgisinternal;" | $LOCAL_PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp($db_trigger);
+
+	return $db_trigger;
+}
+
+####
+# Get unused indexes in a database
+####
+sub dump_unusedindexes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"schemaname, relname, indexrelname, pg_get_indexdef(pg_stat_user_indexes.indexrelid) " .
+		"FROM pg_stat_user_indexes " .
+		"INNER JOIN pg_index ON pg_index.indexrelid = pg_stat_user_indexes.indexrelid " .
+		"WHERE NOT indexrelname ILIKE 'fki%%' " .
+		"AND NOT indisprimary " .
+		"AND NOT indisunique AND idx_scan = 0 " .
+		(&backend_minimum_version(9,1) ? "AND NOT indisexclusion " : "") .
+		"ORDER BY schemaname, relname, indexrelname"
+	);
+
+	return $sql;
+}
+
+####
+# Get redundant indexes in a database
+####
+sub dump_redundantindexes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"pg_get_indexdef(indexrelid) AS contained, " .
+		"pg_get_indexdef(index_backward) AS container " .
+		"FROM " .
+		"( " .
+		"  SELECT indexrelid, " .
+		"    indrelid, " .
+		"    array_to_string(indkey,'+') AS colindex, " .
+		"    indisunique AS is_unique, " .
+		"    lag(array_to_string(indkey,'+')) OVER search_window AS colindexbackward, " .
+		"    lag(indexrelid) OVER search_window AS index_backward, " .
+		"    lag(indisunique) OVER search_window AS is_unique_backward " .
+		"  FROM pg_index " .
+		"    WINDOW search_window AS (PARTITION BY indrelid " .
+		"    ORDER BY array_to_string(indkey,'+') DESC) " .
+		") AS tmp " .
+		"WHERE (colindexbackward LIKE (colindex || '+%') OR colindexbackward = colindex) " .
+		"  AND (is_unique_backward <> is_unique OR (not is_unique_backward AND NOT is_unique)) " .
+		"  AND NOT is_unique AND %s",
+		&backend_minimum_version(10,0) ? 
+		"  coalesce(regexp_match(pg_get_indexdef(indexrelid), ' (WHERE .*)')::text, 'A') = coalesce(regexp_match(pg_get_indexdef(index_backward), ' (WHERE .*)')::text, 'A')" : 
+		"  coalesce((SELECT (regexp_matches(pg_get_indexdef(indexrelid), ' (WHERE .*)'))[1])::text, 'A') = coalesce((SELECT (regexp_matches(pg_get_indexdef(index_backward), ' (WHERE .*)'))[1])::text, 'A')"
+	);
+
+	return $sql;
+}
+
+####
+# Get invalid indexes in a database
+####
+sub dump_invalidindexes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"schemaname, relname, indexrelname, pg_get_indexdef(pg_stat_user_indexes.indexrelid) " .
+		"FROM pg_stat_user_indexes " .
+		"INNER JOIN pg_index ON pg_index.indexrelid = pg_stat_user_indexes.indexrelid " .
+		"WHERE NOT pg_index.indisvalid " .
+		"ORDER BY schemaname, relname, indexrelname"
+	);
+
+	return $sql;
+}
+
+####
+# Get hash indexes in a database
+####
+sub dump_hashindexes
+{
+
+        my $sql =
+		"WITH indexes AS ( " .
+		"SELECT date_trunc('seconds', now()), current_database(), schemaname, relname, indexrelname, pg_get_indexdef(pg_stat_user_indexes.indexrelid) " .
+		"FROM pg_stat_user_indexes " .
+		"INNER JOIN pg_index ON pg_index.indexrelid = pg_stat_user_indexes.indexrelid " .
+		"ORDER BY schemaname, relname, indexrelname) " .
+		"SELECT * from indexes where pg_get_indexdef like '%%USING hash (%' ";
+        return $sql;
+}
+
+####
+# Get table without indexes
+####
+sub dump_count_indexes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"pg_stat_user_tables.schemaname, pg_stat_user_tables.relname, " .
+		"count(pg_stat_user_indexes.indexrelid) as number_of_indexes " .
+		"FROM pg_stat_user_tables " .
+		"lEFT JOIN pg_stat_user_indexes ON pg_stat_user_indexes.schemaname = pg_stat_user_tables.schemaname " .
+		"AND pg_stat_user_indexes.relname = pg_stat_user_tables.relname " .
+		"GROUP BY pg_stat_user_tables.schemaname, pg_stat_user_tables.relname " .
+		"ORDER BY pg_stat_user_tables.schemaname, pg_stat_user_tables.relname "
+	);
+
+	return $sql;
+}
+
+####
+# Get unused trigger function in a database
+####
+sub dump_unusedtrigfunc
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"c.nspname, a.proname " .
+		"FROM pg_proc a JOIN pg_type b ON a.prorettype = b.oid " .
+		"JOIN pg_namespace c ON a.pronamespace = c.oid " .
+		"WHERE %s " .
+		"AND b.typname = 'trigger' AND c.nspname NOT IN ('pg_catalog', 'information_schema') " .
+		"AND a.proname NOT IN (SELECT funcname FROM pg_stat_user_functions) " .
+		"ORDER BY c.nspname, a.proname",
+		(&backend_minimum_version(11, 0) ? "a.prokind = 'f'" : " NOT a.proiswindow AND NOT a.proisagg")
+	);
+
+	return $sql;
+}
+
+####
+# Get PostgreSQL settings
+####
+sub dump_pgsettings
+{
+
+	my $lto = $LOCK_TIMEOUT*1000;
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), category, name, " .
+		" (CASE WHEN name = 'lock_timeout' THEN (setting::bigint-$lto)::text ELSE setting END) as setting," .
+	        " %s, context, source, %s, %s, %s " .
+		"FROM pg_settings " .
+		"ORDER BY category,name",
+		&backend_minimum_version(8, 2) ? "unit" : "''::text as unit",
+		&backend_minimum_version(8, 4) ? "boot_val" : "''::text as boot_val",
+		&backend_minimum_version(8, 4) ? "(CASE WHEN name = 'lock_timeout' THEN (reset_val::bigint-$lto)::text ELSE reset_val END) as reset_val" : "''::text as reset_val",
+		&backend_minimum_version(9, 5) ? "pending_restart" : "''::text as pending_restart"
+	);
+
+	return $sql;
+}
+
+####
+# Get PostgreSQL non default settings
+####
+sub dump_nondefault_pgsettings
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), category, name, " .
+		" setting, %s, context, source, %s, %s " .
+		"FROM pg_settings " .
+        "WHERE source != 'default' AND source != 'override' %s" .
+		"ORDER BY category,name",
+		&backend_minimum_version(8, 2) ? "unit" : "''::text as unit",
+		&backend_minimum_version(8, 4) ? "boot_val" : "''::text as boot_val",
+		&backend_minimum_version(8, 4) ? "reset_val" : "''::text as reset_val",
+		&backend_minimum_version(8, 4) ? "AND setting != boot_val " : ""
+	);
+
+	return $sql;
+}
+
+####
+# Get PostgreSQL database and role settings
+####
+sub dump_pgdbrolesetting
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), b.datname, c.rolname, a.setconfig " .
+		"FROM pg_db_role_setting a LEFT JOIN pg_database b ON (a.setdatabase=b.oid) " .
+		"LEFT JOIN pg_roles c ON (a.setrole=c.oid) " .
+		"ORDER BY 2,3"
+	);
+
+	return $sql;
+}
+
+####
+# Get unlogged tables in a database
+####
+sub dump_unlogged
+{
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), n.nspname, c.relname, c.relkind " .
+		"FROM pg_class c, pg_namespace n " .
+		"WHERE n.oid=c.relnamespace AND c.relpersistence='u' and n.nspname != 'pg_toast' and c.relkind = 'r'" .
+		"ORDER BY n.nspname, c.relname"
+	);
+
+	return $sql;
+}
+
+
+
+####
+# Get path the PostgreSQL configuration files
+####
+sub get_configuration_files
+{
+	my @cfiles = `echo "SELECT setting FROM pg_settings WHERE name IN ('config_file','hba_file','ident_file','data_directory') ORDER BY name;" | $PSQL_PROG`;
+	if ($? != 0) {
+		unlink_pid_and_exit("FATAL: psql error.", 0);
+	}
+	chomp(@cfiles);
+
+	# Add recovery.conf and postgresql.auto.conf to the file list
+	my $alter_system_conf = '';
+	for (my $i = 0; $i <= $#cfiles; $i++) {
+		if ($cfiles[$i] !~ /\.conf$/) {
+			$alter_system_conf = $cfiles[$i] . '/postgresql.auto.conf';
+			$cfiles[$i] .= '/recovery.conf';
+		}
+	}
+	push(@cfiles, $alter_system_conf);
+
+	return @cfiles;
+}
+
+####
+# Get list of DDL to create indexes missing on foreign keys
+####
+sub dump_missingfkindexes
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), relname, " .
+"'CREATE INDEX CONCURRENTLY idx_' || relname || '_' ||
+         array_to_string(column_name_list, '_') || ' ON ' || conrelid ||
+         ' (' || array_to_string(column_name_list, ',') || ')'
+         || CASE WHEN COUNT(DISTINCT redi.indexrelid) >0 THEN '  /* maybe redundant with: '|| string_agg (redi.indexrelid::regclass::text,', ') || ' */' ELSE '' END
+         AS ddl
+FROM (SELECT DISTINCT conrelid,
+       array_agg(attname) AS column_name_list,
+       array_agg(attnum) AS column_list
+     FROM pg_attribute
+          JOIN (-- existing constraints
+                SELECT conrelid::regclass, conname,
+                 unnest(conkey) AS column_index
+                FROM (SELECT DISTINCT conrelid, conname, conkey
+                      FROM pg_constraint
+                        JOIN pg_class ON pg_class.oid = pg_constraint.conrelid
+                        JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
+                      WHERE nspname !~ '^pg_' AND nspname <> 'information_schema' AND pg_constraint.contype = 'f'
+                      ) fkey
+               ) fkey
+               ON fkey.conrelid = pg_attribute.attrelid
+                  AND fkey.column_index = pg_attribute.attnum
+     GROUP BY conrelid, conname
+     ) candidate_index
+JOIN pg_class ON pg_class.oid = candidate_index.conrelid
+LEFT JOIN pg_index i ON i.indrelid = conrelid
+                      AND i.indkey::text = array_to_string(column_list, ' ')
+-- potentially redundant existing indexes
+LEFT JOIN pg_index redi ON redi.indrelid = conrelid
+                       AND column_list  <@ redi.indkey::smallint[] -- contains
+                       AND redi.indkey::text != array_to_string(column_list, ' ')
+WHERE i.indrelid IS NULL
+GROUP BY relname, conrelid, column_name_list
+ORDER BY ddl"
+	);
+
+	return $sql;
+}
+
+####
+# Get per database shared buffers statistics with pg_buffercache
+####
+sub dump_pgdatabase_buffercache
+{
+
+	# date_trunc | datname | buffers | buffered | buffers % | database %
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), d.datname, " .
+		"count(*) AS buffers, count(*)*8192 as buffered, " .
+		"round(100.0 * count(*) / (SELECT setting FROM pg_settings " .
+		"  WHERE name='shared_buffers')::integer,1) AS \"buffers %\", " .
+		"round(100.0 * count(*) * 8192 / pg_database_size(d.datname),1) AS \"database %\" " .
+		"FROM pg_database d INNER JOIN public.pg_buffercache b ON b.reldatabase=d.oid " .
+		"GROUP BY d.datname " .
+		"ORDER BY 2,3 DESC"
+	);
+
+	return $sql;
+}
+
+####
+# Get per relation shared buffers statistics with pg_buffercache
+####
+sub dump_pgrelation_buffercache
+{
+
+	# date_trunc | datname | relname | buffers | relpages | buffered | buffers % | relation %
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), d.datname, c.relname, " .
+		"count(*) AS buffers, c.relpages, count(*)*8192 as buffered, " .
+		"round(100.0 * count(*) / (SELECT setting FROM pg_settings " .
+		"  WHERE name='shared_buffers')::integer,1) AS \"buffers %\", " .
+		"round(100.0 * count(*) * 8192 / pg_relation_size(c.oid),1) AS \"relation %\" " .
+		"FROM pg_class c INNER JOIN public.pg_buffercache b ON b.relfilenode=c.relfilenode " .
+		"INNER JOIN pg_database d ON ( b.reldatabase=d.oid ) " .
+		"WHERE pg_relation_size(c.oid) > 0 " .
+#		"AND c.relname !~ '^pg_' " .
+		"GROUP BY d.datname, c.relname, c.relpages, c.oid " .
+		"ORDER BY 2,4 DESC"
+	);
+
+	return $sql;
+}
+
+####
+# Get usagecount distribution in shared buffers statistics with pg_buffercache
+####
+sub dump_pgdatabase_usercount
+{
+
+	# date_trunc | datname | usagecount | buffer | buffers %
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), d.datname, usagecount, " .
+		"count(*) AS buffers, round(100.0 * count(*) / (SELECT setting FROM pg_settings " .
+		"  WHERE name='shared_buffers')::integer,1) AS \"buffers %\" " .
+		"FROM pg_database d INNER JOIN public.pg_buffercache b ON b.reldatabase=d.oid " .
+		"GROUP BY d.datname, usagecount " .
+		"ORDER BY 2,3 DESC"
+	);
+	return $sql;
+}
+
+####
+# Get dirty usagecount distribution in shared buffers statistics with pg_buffercache
+####
+sub dump_pgdatabase_isdirty
+{
+
+	# date_trunc | datname | usagecount | isdirty | buffer | buffers %
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), d.datname, usagecount, isdirty, " .
+		"count(*) AS buffers, round(100.0 * count(*) / (SELECT setting FROM pg_settings " .
+		"  WHERE name='shared_buffers')::integer,1) AS \"buffers %\" " .
+		"FROM pg_database d INNER JOIN public.pg_buffercache b ON b.reldatabase=d.oid " .
+		"GROUP BY d.datname, usagecount, isdirty " .
+		"ORDER BY 2,3,4 DESC"
+	);
+	return $sql;
+}
+
+####
+# Get information about archive
+####
+sub dump_pgstatarchiver
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), archived_count, last_archived_wal, " .
+		"last_archived_time, failed_count, last_failed_wal, last_failed_time, stats_reset " .
+		"FROM pg_stat_archiver"
+	);
+
+	return $sql;
+}
+
+####
+# Get information about prepared transactions
+####
+sub dump_preparedxactstats
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), database, count(*) AS num_prepared, " .
+		"max(coalesce(extract('epoch' FROM date_trunc('second', current_timestamp-prepared)), 0)) oldest " .
+		"FROM pg_prepared_xacts GROUP BY database"
+	);
+
+	return $sql;
+}
+
+####
+# Get extended statisctics defined in a database
+####
+sub dump_statisticsext
+{
+
+	my $sql = sprintf(
+		"SELECT date_trunc('seconds', now()), current_database(), " .
+		"cn.nspname AS schemaname, c.relname AS tablename, sn.nspname AS stat_schemaname, " .
+		"s.stxname AS stat_name, pg_get_userbyid(s.stxowner) AS stat_owner, " .
+		"(SELECT array_agg(a.attname ORDER BY a.attnum) AS array_agg FROM unnest(s.stxkeys) k(k) JOIN pg_attribute a ON a.attrelid = s.stxrelid AND a.attnum = k.k) AS attnames, " .
+		"s.stxkind AS kinds " .
+		"FROM pg_statistic_ext s JOIN pg_class c ON c.oid = s.stxrelid " .
+		"LEFT JOIN pg_namespace cn ON cn.oid = c.relnamespace " .
+		"LEFT JOIN pg_namespace sn ON sn.oid = s.stxnamespace " .
+		"WHERE NOT (EXISTS (SELECT 1 FROM unnest(s.stxkeys) k(k) JOIN pg_attribute a ON a.attrelid = s.stxrelid AND a.attnum = k.k WHERE NOT has_column_privilege(c.oid, a.attnum, 'select'::text))) " .
+		"AND (c.relrowsecurity = false OR NOT row_security_active(c.oid))"
+	);
+
+	return $sql;
+}
+
+
+
+sub parse_pretty_size
+{
+        my $val = shift;
+        return 0 if (!$val);
+
+	$val =~ s/\s+//g;
+
+        if ($val =~ /^(\d+)PB/i) {
+                $val = $1 * 1024 * 1024 * 1024 * 1024 * 1024;
+        } elsif ($val =~ /^(\d+)TB/i) {
+                $val = $1 * 1024 * 1024 * 1024 * 1024;
+        } elsif ($val =~ /^(\d+)GB/i) {
+                $val = $1 * 1024 * 1024 * 1024;
+        } elsif ($val =~ /^(\d+)MB/i) {
+                $val = $1 * 1024 * 1024;
+        } elsif ($val =~ /^(\d+)KB/i) {
+                $val = $1 * 1024;
+        }
+
+	# du -s command returns kb so do the same here
+        return int($val/1024);
+}
+
+
+####
+# Method used to fork compress process
+##
+sub spawn_compress
+{
+	my $coderef = shift;
+
+	unless (@_ == 0 && $coderef && ref($coderef) eq 'CODE') {
+		print "usage: spawn_comrpess CODEREF";
+		exit 0;
+	}
+
+	if (!defined($COMPRESS_PID = fork)) {
+		print STDERR "Error: cannot fork: $!\n";
+		return;
+	} elsif ($COMPRESS_PID) {
+		return; # the parent
+	}
+	# the child -- go spawn
+	$< = $>;
+	$( = $); # suid progs only
+
+	exit &$coderef();
+}
+
+####
+# Method used to fork metrics collect
+##
+sub spawn_collect
+{
+	my $coderef = shift;
+
+	unless (@_ == 0 && $coderef && ref($coderef) eq 'CODE') {
+		print "usage: spawn_collect CODEREF";
+		exit 0;
+	}
+
+	if (!defined($COLLECT_PID = fork)) {
+		print STDERR "Error: cannot fork: $!\n";
+		return;
+	} elsif ($COLLECT_PID) {
+		return; # the parent
+	}
+	# the child -- go spawn
+	$< = $>;
+	$( = $); # suid progs only
+
+	exit &$coderef();
+}
+
+####
+# Methods used to fork sar and pidstat
+##
+sub spawn_sar
+{
+	my $coderef = shift;
+
+	unless (@_ == 0 && $coderef && ref($coderef) eq 'CODE') {
+		print "usage: spawn_sar CODEREF";
+		exit 0;
+	}
+
+	if (!defined($SAR_PID = fork)) {
+		print STDERR "Error: cannot fork: $!\n";
+		return;
+	} elsif ($SAR_PID) {
+		return; # the parent
+	}
+	# the child -- go spawn
+	$< = $>;
+	$( = $); # suid progs only
+
+	exit &$coderef();
+}
+
+sub spawn_pidstat
+{
+	my $coderef = shift;
+
+	unless (@_ == 0 && $coderef && ref($coderef) eq 'CODE') {
+		print "usage: spawn_pidstat CODEREF";
+		exit 0;
+	}
+
+	if (!defined($PIDSTAT_PID = fork)) {
+		print STDERR "Error: cannot fork: $!\n";
+		return;
+	} elsif ($PIDSTAT_PID) {
+		return; # the parent
+	}
+	# the child -- go spawn
+	$< = $>;
+	$( = $); # suid progs only
+
+	exit &$coderef();
+}
+
+sub wait_all_childs
+{
+	while ($COMPRESS_PID || $COLLECT_PID || $SAR_PID || $PIDSTAT_PID)
+	{
+		my $kid = waitpid(-1, WNOHANG);
+		if ($kid > 0)
+		{
+			if ($COLLECT_PID == $kid) {
+				$COLLECT_PID = 0;
+			} elsif ($COMPRESS_PID) {
+				$COMPRESS_PID = 0;
+			} elsif ($SAR_PID) {
+				$SAR_PID = 0;
+			} elsif ($PIDSTAT_PID) {
+				$PIDSTAT_PID = 0;
+			}
+		}
+		sleep(1);
+	}
+}
+
+sub compress_files
+{
+	my ($dir) = shift;
+
+	&dprint("LOG: compressing directory $dir using $GZIP_PROG.\n");
+
+	`$GZIP_PROG $dir/*`;
+
+}
+
+sub unlink_pid_and_exit
+{
+	my ($msg, $rc) = shift;
+
+	&dprint("$msg\n");
+	# remove the pidfile
+	if (-f $PIDFILE) {
+		unlink $PIDFILE or &dprint("ERROR: Unable to remove pidfile: $!\n");
+	}
+	exit $rc;
+}
+
+# Load setting from file pg_settings.csv and pg_db_role_setting.csv into hashrefs
+sub load_settings
+{
+	my ($in_dir, $pg_settings, $dbrole_settings) = @_;
+
+	if (-e "$in_dir/pg_settings.csv") {
+		# Load data from pg_settings.csv file
+		my $curfh = IO::File->new("$in_dir/pg_settings.csv", 'r');
+		while (<$curfh>) {
+			chomp();
+			my @data = split(/;/);
+			# timestamp | label | setting | value | unit | context | source | boot_val | reset_val | pending_restart
+			$pg_settings->{$data[2]}{value} = $data[3];
+			$pg_settings->{$data[2]}{unit} = '';
+			$pg_settings->{$data[2]}{bootval} = '';
+			$pg_settings->{$data[2]}{resetval} = '';
+			if ($#data >= 6) {
+				$pg_settings->{$data[2]}{unit} = $data[4];
+				$pg_settings->{$data[2]}{bootval} = $data[7];
+				$pg_settings->{$data[2]}{resetval} = $data[8];
+				if ($#data >= 9) {
+					$pg_settings->{$data[2]}{pending_restart} = $data[9];
+				}
+			}
+		}
+		$curfh->close();
+	}
+	if (-e "$in_dir/pg_db_role_setting.csv") {
+		# Load data from pg_db_role_setting.csv file
+		my $curfh = IO::File->new("$in_dir/pg_db_role_setting.csv", 'r');
+		while (<$curfh>) {
+			chomp();
+			my @data = split(/;/);
+			# timestamp | database | role | settings
+			$data[1] ||= 'All';
+			$data[2] ||= 'All';
+			$dbrole_settings->{$data[1]}{$data[2]} = $data[3];
+		}
+		$curfh->close();
+
+	}
+}
+
+# Save pg_settings into temporaries files and return the path to the files
+sub save_pg_settings
+{
+	my ($out_dir, $pg_settings_orig, $pg_settings_curr) = @_;
+
+	my $f1 = "$out_dir/pg_settings_orig.tmp";
+	my $curfh = IO::File->new($f1, 'w');
+	if (defined $curfh) {
+		foreach my $k (sort keys %$pg_settings_orig) {
+			print $curfh "$k : ";
+			foreach my $c (sort keys %{$pg_settings_orig->{$k}}) {
+				next if ($pg_settings_orig->{$k}{$c} eq '');
+				print $curfh "$c => $pg_settings_orig->{$k}{$c}, ";
+			}
+			print $curfh "\n";
+		}
+		$curfh->close();
+	}
+
+	my $f2 = "$out_dir/pg_settings_curr.tmp";
+	$curfh = IO::File->new($f2, 'w');
+	if (defined $curfh) {
+		foreach my $k (sort keys %$pg_settings_curr) {
+			print $curfh "$k : ";
+			foreach my $c (sort keys %{$pg_settings_curr->{$k}}) {
+				next if ($pg_settings_curr->{$k}{$c} eq '');
+				print $curfh "$c => $pg_settings_curr->{$k}{$c}, ";
+			}
+			print $curfh "\n";
+		}
+		$curfh->close();
+	}
+
+	return ($f1,$f2);
+}
+
+# Save db / roles settings into temporaries files and return the path to the files
+sub save_dbrole_settings
+{
+	my ($out_dir, $pg_dbrole_settings_orig, $pg_dbrole_settings_curr) = @_;
+
+	my $f1 = "$out_dir/pg_dbrole_settings_orig.tmp";
+	my $curfh = IO::File->new($f1, 'w');
+	if (defined $curfh) {
+		foreach my $k (sort keys %$pg_dbrole_settings_orig) {
+			foreach my $c (sort keys %{$pg_dbrole_settings_orig->{$k}}) {
+				print $curfh "Database: $k, Role: $c, Settings: $pg_dbrole_settings_orig->{$k}{$c}\n";
+			}
+		}
+		$curfh->close();
+	}
+
+	my $f2 = "$out_dir/pg_dbrole_settings_curr.tmp";
+	$curfh = IO::File->new($f2, 'w');
+	if (defined $curfh) {
+		foreach my $k (sort keys %$pg_dbrole_settings_curr) {
+			foreach my $c (sort keys %{$pg_dbrole_settings_curr->{$k}}) {
+				print $curfh "Database: $k, Role: $c, Settings: $pg_dbrole_settings_curr->{$k}{$c}\n";
+			}
+		}
+		$curfh->close();
+	}
+
+	return ($f1,$f2);
+}
+
+sub read_conf
+{
+	# We don't need a configuration file but if any check the
+	# configuration directives related to pgcluu_collectd.
+	my $curfh = IO::File->new($CONFIG_FILE, 'r');
+	if (defined $curfh) {
+		print STDERR "DEBUG: Reading configuration file $CONFIG_FILE\n" if ($DEBUG);
+		while (my $l = <$curfh>)
+		{
+			chomp($l);
+			$l =~ s/\r//gs;
+			next if (!$l);
+
+			my ($var, @vals) = split(/[\s]+/, $l);
+			if ($var eq 'STATS_COLLECTD_RETENTION') {
+				$vals[0] = int($vals[0]);
+				if ($RETENTION != $vals[0]) {
+					$RETENTION = $vals[0];
+					print STDERR "LOG: Setting retention from configuration file to $RETENTION\n";
+				}
+			}
+		}
+	}
+}

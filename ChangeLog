@@ -1,0 +1,1470 @@
+2022-06-02 - Version 3.3
+
+This release is a maintenance release that fixes issues reported since
+previous release.  It also adds new reports and features.
+
+  - Add TCP utilization and TCP errors reports, from sar -nTCP,ETCP.
+  - Add a comment in the suggested index if it could be redundant
+    with existing ones.
+  - Add support to run pgcluu_collect as user with the pg_monitor role.
+
+Here is the full list of changes since previous release.
+
+  - Add support to run pgcluu_collect as user with the pg_monitor role.
+    Thanks to Nicolas Gollet for the report.
+  - Fix redundant index query to work with PG < 10, regexp_match() must be
+    replaced by regexp_matches() with some additional rewrite.
+  - Replace call to pg_ls_dir by pg_ls_waldir to be able to use pg_monitor
+    privilege starting from PG10. Thanks to Nicolas Gollet for the report.
+  - Fix impossibility to use --lock-timeout. Thanks to Christophe Courtois
+    for the report.
+  - Remove lock_timeout from internally set of PGOPTIONS when querying
+    pgbouncer, the old value is restored after. Thanks to Christophe Courtois
+    for the report.
+  - Fix empty pgbouncer statistics file when running in interactive mode.
+    Thanks to Christophe Courtois for the report.
+  - Add a comment in the CREATE INDEX when the suggested index may be redundant
+    with existing ones. Thanks to Christophe Courtois for the patch.
+  - Fix false report of redundant index when the WHERE clause is different.
+    Thanks to Guillaume Lelarge for the report.
+  - Fix in pgcluu for OUTPUT_DIR always be quoted, especially if their value
+    may contain a white space or separator character. Thanks to Nicolas Gollet
+    for the patch.
+  - Fix network errors disabled. Thanks to Christophe Courtois for the patch.
+  - Add TCP utilization and TCP errors reports, from sar -nTCP,ETCP. Thanks to
+    Christophe Courtois for the patch.
+  - Fix pgbouncer command. Thanks to Nicolas Gollet for the patch.
+  - Modification of the query on pg_stat_statement so that under PostgreSQL 13
+    and higher total_time = total_plan_time + total_execution_time. Thanks to
+    Nicolas Gollet for the patch.
+  - Fix STATS_REPORT_RETENTION directory in config file. Don't prepend DESTDIR
+    to paths in config file. Thanks to Christoph Berg for the patch.
+
+2021-09-30 - Version 3.2
+
+This release is a maintenance release that fixes issues reported since
+previous release.  It also adds new reports and features.
+
+  * Add STATS_REPORT_OUTDIR configuration directive to pgcluu.conf to set
+    the directory where the pgCluu reports will be saved. Default to
+    /var/lib/pgcluu/report/.
+  * Add command line option -t | --lock-timeout with default to 3 seconds
+    to self terminate a SQL query that could be lock by the activity of
+    an other session like a drop table for example.
+  * Add collect and report of unused trigger functions.
+  * Add system statistics dedicated to PostgreSQL process through stats
+    reported by pidstat.
+  * Add report of CPU scaling_governor to check if it set to powersave,
+    setting it to performances can improve performances up to 20% following
+    the PostgreSQL load. For more information on this kernel parameter see
+    https://wiki.archlinux.org/index.php/CPU_frequency_scaling#Scaling_governors
+
+Backward compatibility:
+
+  - Change default retention time to 30 days instead of no storage limit
+    to avoid possible out of memory on uncontrolled installation. Thanks
+    to Jean Pierre Huart for the report.
+
+Here is the full list of changes since previous release.
+
+  - Remove service time report as per sysstat v12.1.2 it has been removed.
+  - Add STATS_REPORT_OUTDIR configuration directive to pgcluu.conf to set
+    the directory where the pgCluu reports will be saved. Default to
+    /var/lib/pgcluu/report/. Thanks to Jean Pierre Huart for the feature
+    request.
+  - Fix error "Use of uninitialized value $pidstat_file in -e at ..." when
+    generating report for sar file only.
+  - Fix possible bad format issue in pidstat parsing du to command with a
+    space character. Thanks to Christophe Courtois for the report.
+  - Subtract the lock_timeout setting when looking at pg_settings to have
+    the right values outside pgcluu.
+  - Fix README typo ; releases come from Github. Thanks to Christophe
+    Courtois for the patch.
+  - Add BEGIN_STAT/END_STAT variables dedicated to sar data on their
+    timezone, to avoid filtering on the wrong hours.
+  - Add command line option -t | --lock-timeout with default to 3 seconds
+    to self terminate a SQL query that could be lock by the activity of
+    an other session like a drop table for example. Thanks to Christophe
+    Courtois for the feature request.
+  - Limit output length of usage to 80 characters.
+  - Fix for begin/end date filtering for sar data. Thanks to Christophe
+    Courtois for the patch.
+  - Fix failure of pidstat through ssh. Thanks to Christophe Courtois for
+    the patch.
+  - Verify that same statistic report is not built twice.
+  - Remove fork for collect of PostgreSQL metrics and add autodetection of
+    the main process pid when pid file is not found.
+  - Remove copyright from html footer.
+  - Split per database report in several HTML pages to avoid too large files.
+    Thanks to Andreas Schrafl for the report.
+  - Add collect of wait event if extension pg_wait_sampling is available
+    in a database. This collect can be disabled with new command line
+    option -w, --no-waitevent.
+  - Set hamburger dropdown menu background from transparent to grey. Thansk
+    to Andreas Schrafl for the patch.
+  - Fix missing report of tables and indexes statistics.
+  - Fix lookup at database list.
+  - Add collect of unused trigger functions. Thanks to Adrien Neyrat for
+    the feature request.
+  - Fix load of database list from binary files in CGI mode.
+  - Fix pidstat reports about CPU wait and iodelay with old systat version
+    where these information was not available. iodelay < sysstat v10.2.1
+    and wait < sysstat v11.5.5
+  - Add CGI reports for pidstat statistics.
+  - Add pidstat data caching.
+  - Fix link to page cluster-archive.html. Thanks to cyberioio for the
+    report.
+  - Fix view of configurations reports that was hidden. Thanks to Lionel for
+    the report.
+  - Fix formatting of README file for command line option.
+  - Add collect of PostgreSQL only system metrics through pidstat.
+  - Fix pgcluu error on reading compressed data files. Thanks to Damien
+    Clochard for the report.
+  - Fix wrong detection of --output option.
+  - Fix previous commit that was breaking GetOptions behaviors
+  - Do not take care of the STATS_REPORT_CACHING value in config file if
+    pgcluu is run in interactive mode with an ouptut directory (-o) and
+    not caching enabled (-c).
+  - Update year in copyright
+  - Fix Storable.pm error when reading empty file. Thanks to Christian Roux
+    for the report.
+  - Make update of system information stat file sysinfo.txt atomic to
+    prevent zero file size.
+  - Fix a bgwriter URL. Thanks to Guillaume Lelarge for the patch.
+  - Fix parsing of sar v12 header. Thanks to Christoph Berg for the report.
+  - Fix INPUT_DIR in generated pgcluu.conf. The path here must not have
+    DESTDIR prepended. Thanks to Christoph Berg for the patch.
+  - Prevent look at pg_statistic_ext if major version is bellow 10.0. Thanks
+    to Devrim Gunduz for the report.
+  - Fix use of DESTDIR vs PREFIX installation process. Thanks to Christoph
+    Berg for the report.
+
+2019-10-29 - Version 3.1 released
+
+This release is a maintenance release that adds support to PostgreSQL
+v12.0. It also add a new report:
+
+  * Add report of extended statistics in report Table Statistics per
+    database. Example:
+    
+        Table         | Extended Statistic
+        public.cities | CREATE STATISTICS sch1.t1_stat (dependencies)
+                                  ON city,country FROM public.cities;
+
+It also fixes some issues reported by users since last month:
+
+  - Fix some typos in documentation. Thanks to Justin Pryzby for the
+    report.
+  - Replace obsolete pg_constraint.consrc in PostgreSQL v12 by a call
+    to function pg_get_constraintdef(). Thanks to seadba and Devrim
+    Gunduz for the report.
+
+
+2019-09-18 - Version 3.0 released
+
+This release is a major release that adds lot of improvement and
+new reports. It also improve performances and fully support a CGI
+mode with dynamic content for realtime reports.
+
+New or enhanced reports/features:
+
+  * The CGI mode to provide dynamic reports on time selection is now
+    production ready and has left the beta stage. See documentation
+    on how to enable it. Debian packaging enable this mode by default.
+  * Installation and configuration is fully managed from Makefile.PL
+    script. This will help distribution packaging with additional
+    configuration directives to control the behavior of pgcluu scripts
+    with generic systemd service and timer files. 
+  * Add incremental mode to pgcluu. That mean that you don't have to
+    remove the content of the report directory anymore before running
+    pgcluu again and when pgcluu detect that you are running in this
+    mode. The incremental mode is detected from statistic directory
+    when you have used the --rotate-daily or --rotate-hourly option
+    to pgcluu_collectd.
+  * Rewrite Stats I/O reports to display read/hit per table or indexes
+    during the audit period reported.
+  * Move Xlog (Wal bytes written) report under replication menu as
+    data comes from pg_stat_replication.
+  * Explode System and Cluster reports into several reports dedicated
+    files to limit the size of the HTML files in incremental mode.
+  * Add collect and report of vm.nr_overcommit_hugepages.
+  * Add report on pages scanned to report number of pages scanned by
+    the kswapd daemon and number of pages scanned directly per second
+    (pgscank/s and pgscand/s). It also reports the number of pages
+    the system has reclaimed from cache (pagecache and swapcache) per
+    second to satisfy its memory demands (pgsteal/s). On a second
+    axis %vmeffto reports the the efficiency of page reclaim.
+  * All pages reports have been moved as sub menu of the Page menu and
+    pgfree has been removed from the page fault report.
+  * Limit system cache statistics report to pgpgin/s and pgpgout/s and
+    a new report is dedicated to Page fault statistics with majflt/s,
+    minflt/s and pgfree/s dataset. Dataset minflt/s is calculated from
+    sar output as result of "fault/s - majflt/s".
+  * All statistics about pg_stat_user_* and pg_stat_xact_user_* views
+    are now stored as a snapshot at start and at end of the audit
+    period and each hour if you are running in incremental mode. The
+    old behavior was to append the snapshot at each running interval
+    to the data file but this is not necessary and this can use huge
+    disk space if you have lot of table and indexes in your database.
+    Backward compatibility is preserved.
+  * New report of json versus jsonb columns in each database.
+  * Add keepalive kernel configuration in SysInfo report.
+  * Separate bgwriter "allocated" buffers in a dedicated report for
+    better reading.
+  * Add new report about estimated memory workload based on the value
+    of Committed_AS from /proc/meminfo. Committed_AS is the total
+    amount of memory estimated to complete the workload. This value
+    represents the worst case scenario value, and also includes swap
+    memory. The report show the memory workload aver the time.
+
+New command line options:
+
+  - Add option -x, --external-menu to pgcluu to save the common menu
+    in menu.html and load it into each report using w3-include-html
+    attribute from w3.js. This will only work if access to HTML report
+    is through a Web server, not using the file:// protocol.
+  - Add new option --retention to pgcluu to set number of rolling days
+    to keep in report directory. Default is to store indefinitely.
+  - Add option --retention NDAYS to pgcluu_collectd to set the number
+    of rolling days to keep in data directory in incremental mode.
+    Default is to store indefinitely.
+
+New configuration directives :
+
+  * Add configuration directive STATS_REPORT_CACHING to pgcluu.conf
+    file. This directive must be enabled in CGI mode. In this case the
+    pgcluu script must be run periodically at least each 5 minutes to
+    build and update cached statistics. In cache mode pgcluu generate
+    binary file in the statistics directory and nothing in the report
+    directory. The pgcluu.service and pgcluu.timer can be use, pgcluu
+    will read the configuration file and switch automatically to cache
+    mode if STATS_REPORT_CACHING is enabled.
+
+  * Add MAX_RENDERED_DAYS configuration directive to set the maximum
+    number of days in a graph. Using default pgcluu_collectd 1 minute
+    interval each, daily graph will have 1440 points. Having too much
+    data to render is not a good point for performances with the
+    current code. The user can set is own graph period, default is to
+    limit to the first seven days of the selected period. This mean a
+    maximum of 10080 points for one week, this seems a safe limit.
+
+It also fixes some issues reported by users since last five months:
+
+  - New report on memory workload based on values of Committed_AS from
+    /proc/meminfo. Thanks to Jehan-Guillaume de Rorthais for the
+    feature request.
+  - Separate bgwriter "allocated" buffers in a dedicated report.
+    Thanks to Guillaume Lelarge for the report.
+  - Use MASK to 0022 for directory and file creation and add a note
+    about securing the stats repository in the source code.
+    It can be changed to 0027 if you want to secure the data directory
+    Note that in CGI mode the www-data user or group need read access
+    to all files in the stat directory. The systemd service files take
+    care of setting the privilege for the postgres and www-data users.
+  - Make perlcritic more happy.
+  - Try to handle automatically systemd RPM specific path in install
+    process (/lib/systemd/system/).
+  - Update resources files minimization.
+  - Fix declaration of config file.
+  - Change Perl installation paths to be vendor paths by default and
+    adapt path replacement by DESTDIR.
+  - Keep pgcluu.conf after a make clean to be able to see the content.
+  - Update documentation about new installation behavior.
+  - Fix perl replacement issues on service file
+  - Update MANIFEST and META.yml files
+  - Update path to man page in documentation.
+  - Replace DATADIR by STATDIR and HTMLDIR by RSCDIR in Makefile.PL.
+    Add missing REPORTDIR variable, default /var/lib/pgcluu/report.
+  - Change default PIDDIR to /var/run/postgresql.
+  - Replace path in services files following environment variables
+    defined with Makefile.PL.
+  - The configuration file pgcluu.conf is now auto-generated by script
+    Makefile.PL
+  - Add support to some new environment variables to fully customize
+    the installation paths (HTMLDIR,CGIDIR,CONFDIR,PIDDIR,DATADIR,
+    APACHECONF,MANDIR,DOCDIR,SYSTEMDDIR,RETENTION). Default are:
+    
+            DESTDIR     => /usr/local
+            INSTALLDIRS => site
+            CONFDIR     => DESTDIR/etc
+            PIDDIR      => /var/run
+            DATADIR     => /var/lib/pgcluu/data
+            HTMLDIR     => DESTDIR/share/pgcluu
+            CGIDIR      => /usr/lib/cgi-bin
+            APACHECONF  => /etc/apache2/conf-available
+            MANDIR      => DESTDIR/share/man
+            DOCDIR      => DESTDIR/share/doc
+            SYSTEMDIR   => DESTDIR/lib/systemd/system
+            RETENTION   => 0
+    
+    If INSTALLDIRS is set to 'vendor':
+    
+            CONFDIR     => /etc
+            DESTDIR     => /usr
+    
+    The configuration file is auto-generated by the Makefile.PL script
+    and saved into CONFDIR/pgcluu.conf. If the destination file exists
+    it is not overridden. The file is saved as example in directory
+    DOCDIR/pgcluu/examples/pgcluu.conf.dist
+    
+    The man page is saved as DESTDIR/share/man/pgcluu.1p.gz and a
+    symbolic link pgcluu_collectd.1p.gz is created to this file. The
+    documentation, README, changelog.gz, LICENSE files are saved under
+    DESTDIR/share/doc/.
+    
+    For the CGI mode, resources (css & js files from the cgi-bin/rsc)
+    are saved under the DESTDIR/share/pgcluu/rsc directory. The CGI
+    script is saved under /usr/lib/cgi-bin/pgcluu.cgi. The Apache
+    configuration file under /etc/apache2/conf-available/pgcluu.conf
+    with a symbolic link /etc/apache2/conf-enabled/pgcluu.conf created
+    to this file. Its content: 
+
+            Alias /pgcluu HTMLDIR/
+            <Directory HTMLDIR/>
+                Options FollowSymLinks MultiViews
+                AllowOverride None
+                Require local
+                #Require ip 192.1.168.0/24
+            </Directory>
+    
+    The systemd files (pgcluu_collectd.service, pgcluu.service and
+    pgcluu.timer) are saved as examples into DOCDIR/pgcluu/examples/
+    and into the systemd directory SYSTEMDDIR/
+    
+    The right path to the configuration file is set into all scripts
+    pgcluu, pgcluu_collectd and pgcluu.cgi. The path where the pid
+    file must be saved is replaced into pgcluu_collectd with the value
+    of PIDFILE variable.
+  - Enable configuration reading to pgcluu_collectd. The configuration
+    directive supported by this script is STATS_COLLECTD_RETENTION. It
+    is used to set the retention limit in the statistics directory
+    expressed in number of days. This directive is only used by script
+    pgcluu_collectd in incremental mode. Only the last number of days
+    will be preserved, obsolete directories will be removed. It can be
+    used to preserved disk space. Default store indefinitely.
+  - Enable configuration reading to script pgcluu. The configuration
+    directive supported by this script is STATS_REPORT_RETENTION. It
+    is used to set the retention limit in static html report directory
+    expressed in number of days. This directive is only used by pgcluu
+    in incremental mode. Only last number of days will be preserved,
+    obsolete directories will be removed. It can be used to preserved
+    disk space. Default store indefinitely.
+  - Fix some uninitialized variables during report generation of
+    pg_stat_user_tables and pg_stat_user_indexes.
+  - Set default configuration file path to /etc/pgcluu.conf and no
+    more /usr/local/etc/pgcluu.conf
+  - Change $CONFIG_FILE declaration in CGI script.
+  - Update copyright year.
+  - Limit number of days to process for a single time period
+    controlled by configuration directive MAX_RENDERED_DAYS.
+  - Disable Year and Month time selector for the moment, this is too
+    much data to render with the actual implementation of pgcluu.cgi
+  - Separate cluster / database actions.
+  - Only display latest information in CGI mode for all database
+    table and index reports that reports a list of statistics.
+    These informations can not be cumulated over time selection.
+  - Add map between actions and binary file to only load relevant
+    files
+  - Improve report generation by reading only required data.
+  - Prevent reading sar stat from data file when already read from
+    binary file.
+  - Fix multiple call to set_device_list() and compute_sarfile_stats()
+  - Only display latest information in CGI mode for menu Home, SysInfo
+    and Database.
+  - Fix offset caching for incremental mode.
+  - Fix missing call to dump_sar_binary() when build cache from hourly
+    rotation.
+  - Fix missing System menu on some condition.
+  - Submit immediately the time selector when day/week/month/year is
+    selected.
+  - Add more information on incremental mode to documentation.
+  - Fix CGI Time selector behavior.
+  - Fix calendar output for days that have already been processed.
+  - Fix issue in CPU parsing from sar output since addition of Softnet
+    stats in version 11.7.2.
+  - Update minified javascript files and add file w3.js to the list
+    of resources files.
+  - Add resources/w3.js Javascript library to be able to include a
+    HTML file into an other. Used to not include the menu in each HTML
+    file from menu.html.
+  - Explode cluster.html output into per report dedicated files to
+    limit the size of a HTML file in incremental mode. This should
+    be applied to other huge files (system.html and database-DB.html).
+  - Fix some HTML tags.
+  - Add documentation about Dynamic Reports generation using the CGI
+    mode. Thanks to Maiken Saveljev for most part of the installation
+    guide.
+  - Add information about incremental mode and --retention option at
+    end of pgcluu help.
+  - Add example for incremental mode at end of help message.
+  - Add a warning about storing indefinitely statistics with script
+    pgcluu_collectd that can fill disk space in the short or medium
+    term. Obsolete statistics can be removed using new command line
+    option '--retention ndays' with pgcluu_collectd.
+  - Update documentation about pgcluu_collectd --retention option.
+    Thanks to Christoph Courtois for the feature request.
+  - Document sorttable license. The license is called X11 in the
+    file, but MIT on the website. Stick with MIT because that's what
+    the other js files are using. Thanks to Christoph Berg for the
+    patch.
+  - Add pages reports changes to CGI.
+  - Add report on pages scanned to report number of pages scanned by
+    the kswapd daemon and number of pages scanned directly per second
+    (pgscank/s and pgscand/s). Thanks to Jehan-Guillaume de Rorthais
+    for the feature request.
+  - Additional fixes and improvements on CGI devices detection to
+    display system menu.
+  - Fix unwanted "no dataset" in table stats.
+  - Modifiy pgcluu to support new changes in pgcluu_collected about
+    pg_stat_(user|all)_* statistics storage. This patch also remove
+    use of global variable %all_vacuum_stats that was duplicating
+    storage with %all_stat_user_tables that already contain vacumm
+    and analyze statistics.
+  - Add description of %vmeff to reports.
+  - Fix missing wait of compression child process resulting in zombi
+    process. Thanks to Jehan Guillaume de Rorthais for the report.
+  - Suppress which command error in some distribution. Thanks to
+    Michael Vitale for the report.
+
+2018-12-13 - Version 2.9 released
+
+This release is a minor release that fix a major issue in the
+interval detection. This This led to a bad scale in bg_writter,
+replication and most database statistics reports. Everybody must
+upgrade immediately.
+
+It also fixes some issues reported by users since last release:
+
+  - Improve devices list retrieving and fix several menu issues.
+  - Fix checkpoint counter legend.
+  - Move query in pg_stat_statements at the right of the table for
+    better readability.
+  - Fix report of disk use, mounted devices, running processes,
+    crontab and installed package to avoid duplicate entries.
+  - Empty SysInfo arrays before reading sysinfo file, this prevent
+    duplicate data.
+  - Improve parsing of sar file.
+  - Fix interval that was set in milliseconds instead of second.
+    This conduct to wrong scale (ex: Kb instead of Gb) in bg_writter,
+    replication and database statistics reports. Thanks to Guillaume
+    Lelarge for the report.
+
+2018-11-28 - Version 2.8 released
+
+This release is a minor release that fix some issues reported by
+users over past months, it also adds some new reports:
+
+  - Add disk space utilization report over time using df command
+    for sysstat version older than 11.1.4.
+  - Add report of percentage of disk space and inode used on each
+    file system. The information is available in sar output since
+    11.1.4 version. Thanks to Guillaume Lelarge for the feature
+    report.
+  - Add PageTables information in SysInfo memory report.
+  - Show database information about table/indexes in capture mode.
+  - Add report of number of tasks currently blocked, waiting for I/O
+    to complete "Run queue" report.
+  - Add new report about system dirty memory that need to be written
+    to disk as well as amount of active/inactive memory.
+  - Show highest dirty memory to write and highest number of processes
+    blocked in overall stats page.
+  - Add report of crontab entries for the user running pgcluu.
+  - Add report of installed PostgreSQL packages in main page.
+
+New pgcluu_collectd command line option:
+
+  - Add command line option --package-list to be able to set a custom
+    command to list PostgreSQL packages. Default is to auto-detect
+    package type between rpm and dpkg, using command 'rpm -qa' or
+    'dpkg -l'. If you have an other system you can use this option to
+    set a custom command. A filter on keyword 'postgres' is appended
+    to the command: ' | grep postgres'.
+
+Here are the complete list of bug fixes in this release:
+
+  - Change the way sysstat version is checked and save the version
+    into to sysinfo.txt file for use in pgcluu script.
+  - Remove extra new line at end of data file generated by the
+    patch on search_path securing.
+  - Add collect of disk space and inode used over time stored in file
+    fs_stat_use.csv. Need more work to avoid duplicate data with new
+    versions of sar that already report fs space use.
+  - Replace all call to Perl ternary operator with usual if-then-else
+    statement. In some condition this operator do not works and makes
+    pgcluu return negative values in overall stats. This was happening
+    only when pgcluu encounter a stat reset in the data files. Thanks
+    to Guillaume Lelarge for the report.
+  - Remove /dev/loop from devices statistics report.
+  - Add PageTables information in SysInfo memoryb report. Thanks to
+    Adrien Neyrat for the patch.
+  - Remove some unwanted metrics displayed in capture mode.
+  - Show database information about table/indexes in capture mode.
+  - Exclude /dev/loop from result of "df" command and squashfs from
+    "mount -l" command.
+  - Prevent pgcluu_collectd to stop before that all metrics collected
+    from the current loop have been written to disk. When it receives
+    the terminate signal (-k option) it previously stops immediately,
+    the problem was that this can conduct to empty or incomplete data
+    file. Now it waits until the loop is terminated before exiting.
+  - Fix compression of hourly directory when -R | --rotate-hourly and
+    -z | --compress options are enabled. The compression was called
+    each loop and not at each hour rotation.
+  - Add warning about mandatory use of -d option when pg_buffercache
+    reports are enabled (-B) but pg_buffercache extention is not found
+    in the connection database.
+  - Fix missing buffercache statistics since secure path has been
+    included in commit b61bf44. This required that pg_buffercache
+    table call was prefixed by the public schema. Thanks to
+    lobojohnson for the report.
+  - Fix unwanted print of tablespace path in cluster reports.
+  - Remove not useful information in buffercache graph legends.
+  - CSS: Increase size of the sysinfo panel.
+  - Adapt automatically pgCluu to changes in sar sysstat tool since
+    version 11.5.7. As per sysstat commit 8d635e0: Replace "rd_sec/s"
+    and "wr_sec/s" fields with "rkB/s" and "wkB/s". These fields are
+    now expressed in kilobytes instead of sectors. Replace "avgrq-sz"
+    field with "areq-sz". This field is now expressed in kilobytes
+    instead of sectors. Rename "avgqu-sz" field to "aqu-sz" to make
+    it consistent with iostat's output.
+  - Add report of number of tasks currently blocked, waiting for I/O
+    to complete to "Run queue" report. This information is available
+    with sysstat >= 9.1.7
+  - Show also highest dirty memory to write and highest number of
+    processes blocked in main page.
+  - Add new report about system dirty memory that need to be written
+    to disk as well as amount of active/inactive memory. These metrics
+    are available in recent sar/sysstat versions.
+  - Add report of crontab entries.
+  - Change icon for packages report.
+  - Add report of PostgreSQL installed package in main page.
+  - Add storage information about PostgreSQL packages installed on
+    the system.
+  - Add command line option --package-list to be able to set a custom
+    command to list PostgreSQL packages. Default is to auto-detect
+    package type between rpm and dpkg, using command 'rpm -qa' or
+    'dpkg -l'. If you have an other system you can use this option to
+    set a custom command. A filter on keyword 'postgres' is appended
+    to the command: ' | grep postgres'.
+
+
+2018-07-09 - Version 2.7 released
+
+This release is a minor release that fix some issues reported by
+users over past year, it also adds some new reports:
+
+  - Add reports of pgbouncer wait for server statistics.
+  - Make pgCluu more compatible with PG10 and pgBouncer 1.8
+  - Add kernel vm.overcommit_kbytes configuration to report.
+
+Here are the complete list of bug fixes in this release:
+
+  - Fix Prepared Transaction menu not disabled with no stat data.
+  - Fix typos and use proper measure in the graph. Thanks to Fabio Porta for the patch
+  - Add vm.overcommit_kbytes to kernel report. Thanks to Adrien Neyrat for the patch.
+  - Since version 1.8 of pgbouncer, the command "show stats" changed output. Make pgcluu compatible. Thanks to Fabio Pardi for the report and the mapping of changes.
+  - Fix issue in partitionning lookup.
+  - Secure search_path before executing SQL queries.
+  - Fix several use of unintialized variable case.
+  - Add missing function IsLeapYear. Thanks to Emmanuel Boucle for the patch.
+  - Fix report for network and disk devices in incremental mode.
+  - Fix unwanted Network menu when no network device are found.
+  - Fetch devices informations. Thanks to Adrien Neyrat for the patch.
+  - Dockerise pgcluu, the container helps run both the collection and the report generator. Thanks to Roy Golan for the patch.
+  - Disable System submenu when the corresponding report is not available.
+  - Append %idle to cpu report.
+  - Fix list of resources files. Thanks to Bosstek Consulting for the report.
+  - Change fetch_version() to be closer with the new versioning politic in 10.0 and above. Thanks to Julien Rouhaud for the patch.
+  - Makes pgcluu compatible with PostgreSQL 10.0.
+
+
+2017-07-09 - Version 2.6 released
+
+This release is a minor release that fix some issues reported by
+users over past year but it also adds some new interesting reports:
+
+  * Add report on prepared transaction and oldest one in seconde
+    per database.
+  * Detect partitions and summarize information in a dedicated
+    report.
+  * Add kernel scheduler configuration for sched_autogroup_enabled
+    and sched_migration_cost_ns to sysinfo report.
+  * Add report of configuration files changes in incremental mode.
+  * Report on cancelled queries due to conflicts is now a time
+    based graph instead of a pie chart.
+  * bgwritter buffer clean, checkpoint and backend statistics are
+    now reported as bytes using size of 8192 per buffer.
+  * Add report of allocated buffers with bgwritter buffer statistics.
+  * Add report of transaction throughput per second.
+  * Show data checksum status.
+  * Add report of unlogged tables. Database with unlogged tables
+    will be listed in cluster view.
+  * Add hourly index when --rotate-hourly is enabled.
+
+and useful features:
+
+  * Compatibility with PostgreSQL 10.0
+  * Add static index on main directory with incremental report
+    to link to the different days.
+  * Use bootstrap modal dialog windows to download graph as png.
+  * Autodetect interval between collected data to support interval
+    change during stats collect.
+  * Replace javascript call to dateToDisplay.toGMTString() with
+    dateToDisplay.toString(). Please note that this could not be
+    backward compatible with your previous timezone settings. See
+    pgcluu.js to revert the function call.
+  * Create DDL of missing index concurrently.
+
+Here are the complete list of bug fixes in this release:
+
+  - Finalize systemd unit files. pgcluu_collectd.service is used to
+    start pgcluu_collectd in daemon mode. Other files, pgcluu.service
+    and pgcluu.timer to execute pgcluu periodically to generate reports.
+  - Add import of missing jqplot.canvasAxisLabelRenderer.min.js file used
+    to render axis labels in graphs.
+  - Set logo and icon on a single line in an url attribute as chrome
+    complain that it will be obsolete in M60.
+  - Add partitioning report and partition information into cache.
+  - Add hourly index when --rotate-hourly is enabled.
+  - Add support of partition information to cache mode.
+  - Fix unwanted exit in cache mode
+  - Cosmetic change in tooltip and download button. Main menu font size have also been improved.
+  - Update generated html to use Bootstrap 3 glyphicons.
+  - Add javascript and CSS sources, licences and download information for
+    packaging. Add a tool to minified and embedded the script and css into
+    pgcluu Perl script and copy the minified files into cgi-bin/rsc/
+  - Add minified resources file for CGI into cgi-bin/rsc
+  - Fix redundant index query. Thanks to Julien Rouhaud for the patch.
+  - Detect partitions and summarize information in a dedicated report.
+    Thanks to Julien Rouhaud for the patch.
+  - Refactor pidfile unlink handling. Thanks to Julien Rouhaud for
+    the patch.
+  - Limit call to pg_relation_size() when we are in capture mode.
+    Thanks to Guillaume Lelarge for the report.
+  - Add information about recheck of redundant index with primary key
+    and index on a column referencing a foreign key.
+  - Fix exclusion of UNIQUE index in redudant indexes report.
+  - Fix incremental global index on resize.
+  - Update year in copyright.
+  - Add index on main directory with incremental report to link to
+    the different days. Thanks to Heath Yob for the feature request.
+  - Add verification that pg_stat_statement is loaded from
+    shared_preload_libraries.
+  - Fix incomplete per-database-statistics. Thanks to Markus Braunig
+    for the report.
+  - Add kernel scheduler configuration for sched_autogroup_enabled
+    and sched_migration_cost_ns to sysinfo report. Thanks to Adrien
+    Nayrat for the patch.
+  - Fix broken main menu when no disk devices was present in sar
+    report.
+  - Allow to set label for y2axis in create_linegraph() parameters
+  - Change parameters and return of the get_diff() method to support
+    incremental mode.
+  - Create function get_diff() and shows_diff() to report
+    configuration file change.
+  - Append new color for line graph.
+  - Set missing database list with sysinfo and about menu.
+  - Fix Not a HASH reference in function reporting information about
+    indexes.
+  - Rename diff storage variables and stores them in binary file.
+    Initialyze storage variables for statistics that must be read
+    from file each time.
+  - Fix detection of working directories with dates over two months.
+  - Fix runqueue size report. Thanks to Thomas Reiss for the report.
+  - Create function to reuse the look for sysinfo file.
+  - pgcluu CGI now append new csv statistic to cached binary files.
+  - The menu is now built at end to avoid reading csv files first to
+    look for database, disk device and network interface.
+  - The CGI home page is now just built from the binary files to
+    speed up the first screen. As we do not append last data collected
+    from the csv files we indicate at which time the cache was last
+    built. This is to give a quick snapshot of the dashboard. When
+    looking at the statistics binary and csv files are both read.
+    If the cache have not been run yet, pgcluu will read dashboard
+    statistics from data fileis which takes longer to display.
+  - Allow incremental cache. When running in cache mode pgcluu will
+    append new csv statistics to old cached binary files. Then when
+    building reports, pgcluu will first load statistics from binary
+    files and complete statistics with data from csv file collected
+    after the last cache mode run. This mean that if cache mode is
+    run each minute on an incremental statistics collect (see option
+    -r or -R of pgcluu_collectd), pgcluu is able to create report very
+    quickly at any time. This is especially useful with CGI mode where
+    a full day statistics report can be displayed in few seconds.
+  - Fix diff of configuration files, old and new files was inversed.
+    Thanks to Adrien Nayrat for the report.
+  - Fix display of message no dataset on empty graphs.
+  - Update description of temporary files report and statistics
+    on checkpoints.
+  - Rewrite use of interval between collected data to support change
+    during collecting. Interval is now always calculated from the
+    difference between the current line end the previous line. This
+    mean that the first line is never present in reports with per
+    second statistics.
+  - Fix formatting of bytes in pretty number.
+  - Improve storage of database list with huge number of database.
+  - Fix timezone on all reports and remove graph per tablespace and
+    replace them with a list of tablespace and their location.
+  - Fix timezone on start and end timestamp of collect. Remove graph
+    per tablespace and replace them with a list of tablespace and
+    their location.
+  - Clear Start/End input box at startup in CGI.
+  - Comment and include REVERT_DATE toogle about sar date format
+    in CGI configuration file.
+  - Fix timezone and time selector in javascript menu.
+  - Fix use of timezone and date detection in sa file.
+  - Fix date parsing from sa text file.
+  - Fix some warning about use of undefined variables.
+  - Add link to last known statistics in CGI front page when no
+    data are found.
+  - Fix a call to timegm_nocheck()
+  - Split set_overall_stat_from_binary() in two function, one for
+    database orverall statistics and the other for system statistics.
+  - Fix parsing of sa file.
+  - Do not load statistic from the last day when hour:min is 00:00.
+  - Fix some bugs when there is just sar cached binary files.
+  - Fix two digit in date parts on start/end date.
+  - Fix cache mode when there is just sar file in entry.
+  - Add INCLUDE_DEV configuration directive to be able to filter
+    disk device. Allow comma as list separator in configuration file.
+  - Add information about how to parse sysstat sa binary and text file.
+  - Fix remove of unlogged tables following pg version.
+  - Fix colspan on unlogged table report.
+  - Add report of transaction throughput per second.
+  - Use psql -X option so .psqlrc doesn't get in the way. If .psqlrc
+    contains for example \timing, pgcluu_collectd will get confused.
+    Thanks to Christoph Berg for the patch.
+  - Separate svctm/await dataset on two different axes.
+  - Remove unwanted bgwriter stats prior pg 9.1
+  - Add data checksum status to CGI report.
+  - Fix autodetection of timezone and set default timezone for sar
+    statistics to the result of
+	perl -MPOSIX -e "print substr(strftime(\"%z\", localtime()), 0, 3);".
+  - Replace javascript call to dateToDisplay.toGMTString() with
+    dateToDisplay.toString(). Please note that this could not be
+    backward compatible with your previous timezone settings. See
+    pgcluu.js to revert the function call.
+  - Fix an issue with --from-sa-file where date was still incremented.
+    Thanks to Flavie Perette for the report.
+  - Replace sadf -D option by -d to obtain a compatible output.
+  - Separate svctm/await dataset on two different axes to be able to
+    see both dataset.
+  - Fix kernel parameter hugepage report when not available.
+  - Fix all call of psql that use both -f - and -c that doe not have
+    the same behavior in pg 9.6. Previous version does not care of
+    the -f stdin input when a command was provided with -c. This not
+    compatible anymore. Thanks to Vincent Laborie for the report.
+  - Fix collect of lock in pg_stat_activity with PostgreSQL 9.6.
+    Thanks to Vincent Laborie for the report.
+
+
+2016-04-27 - Version 2.5 released
+
+This release is a major release that fix some issues reported by
+users over past year and a full replacement of the flotr2 javascript
+chart library with jqplot.
+
+There's also some new interesting reports:
+
+  * Add report for hash indexes.
+  * Keep track of pg_settings and database/roles settings changes and
+    show diff in the the reports.
+  * Add report of pending restart in pg settings view.
+  * Add information about percentage of timed against requested
+    checkpoints.
+  * Split database menu in submenu per set of 10 databases.
+  * Add report of tables without indexes and tables with more than
+    five indexes.
+  * Add report about invalid index after concurrency build.
+  * Add report of system and PostgreSQL uptime.
+  * Add report of last statistics reset per database and report of
+    last autovacuum and autoanalyze.
+  * Add report of bgwriter last statistics reset in Home/Cluster view.
+  * Add a non default configuration settings report.
+
+and useful features:
+
+  * Autodetect timezone from csv data files and automatic adjustment
+    of chart axis.
+  * Add systemd start script.
+  * Add collect of crontab information.
+  * Add support to daylight saving.
+  * Add compatibility with PostgreSQL 9.5
+  * Add ablity to export plots data as csv
+  * Set legend table outside the graph.
+  * Display specific titles and description for overall graphs.
+
+Note that a CGI script have been added to be able to perform temporal
+lookup in incremental pgCluu statistics, with predefined year, month,
+day and hour views. This is a work in progress, it will be available
+in next major release.
+
+Upgrade: you can safely override previous installation, backward
+compatibility with 2.4 version is preserved.
+
+Here are the complete list of bug fixes in this release:
+
+  - Add report for hash indexes. Thanks to Adrien Neyrat for the
+    patch.
+  - Fix detection of non official release like EnterpriseDB or devel.
+    Thanks to Piotr Gbyliczek for the patch.
+  - Add use of IO::File, some system was complaining about that.
+    Thanks to microtodd for the report.
+  - Only collect stored procedures count instead of name list.
+  - Refresh sysinfo.txt at each loop and order output per database
+    name.
+  - Fix capture mode with PostgreSQL version 8.4
+  - Fix some bug in capture report.
+  - Fix use of timezone in cluster/database related charts.
+  - Autodetect timezone from csv data files.
+  - Fix some documentation typo about systemd use and apply change to
+    pgcluu.pod.
+  - Fix systemd unit files. Thanks to gabx for the patch.
+  - Update README with systemd unit files usage
+  - Add collect of crontab information. It uses the current logged
+    username or postgres as default and it can be overriden with the
+    --cron-user command line.
+  - Do not collect metrics if previous time is upper than current time
+    This is to prevent storing statistics twice when hour change
+    during daylight saving. Thanks to brownbh3 for the report.
+  - Keep track of pg_settings and database/roles settings changes and
+    show diff in the the reports.
+  - Update comment on pg_settings columns.
+  - Add report of pending restart in pg settings view.
+  - Exclude from non default settings collect case where setting equal
+    boot_val.
+  - Add collect of pending_restart column from pg_settings (pg 9.5).
+  - Remove obsolete css file, it is replaced by font-awesome.min.css
+  - Keep track of configuration files changes by storing diff to files
+    Changes are sorted by date at bottom of the configuration reports.
+  - Fix range of icons in embedded fontawesome css.
+  - Fix report of number of xlog data written per second. Thanks to
+    Ronan Dunklau for the report.
+  - Add ablity to export plots data as csv. Thanks to Julien Rouhaud
+    for the patch.
+  - Fix/change some fontawesome icons.
+  - Fix menu height in pgcluu css.
+  - Add ablity to export plots data as csv
+  - Fix scale on yaxis sticks in javascript graphs.
+  - Report percentage between checkpoint timed and requested in legend
+  - Add information about percentage of timed against requested
+    checkpoints.
+  - Update with resources directory move.
+  - Move resources directory into cgi-bin/ to be less confusing.
+  - Update list of file in MANIFEST for pgcluu package.
+  - Fix top menu height and color in start/end date input box of CGI.
+  - Update html header with new .min.css and .min.js files
+  - Use minimalist version of CSS and Javascript and remove call to
+    sourceMappingURL
+  - Replace external font file fontawesome-webfont.ttf by the base64
+    embeded version.
+  - Removed by their optimised min files.
+  - Fix unparsed section in sysinfo.txt when file is generated from
+    a Windows server.
+  - When system information are missing, display a message.
+  - Remove Deadlocks end Temporary files menu when PostgreSQL version
+    id lower that 9.2.
+  - Fix y2axis on hit ratio and commit vs rollback reports. Thanks to
+    Guillaume Lelarge for the report.
+  - Fix report of huge page information.
+  - Fix an additional series 4 in background writer clean stats report
+    Thanks to Guillaume Lelarge for the report.
+  - Disable mouse click on disabled menu.
+  - Do not display empty deadlocks and temporary files informations if
+    PostgreSQL version is lower than 9.2. Thanks to Guillaume Lelarge
+    for the report.
+  - Prevent display of SysInfo menu when there is no such information.
+    Thanks to Guillaume Lelarge for the report.
+  - Prevent collect of local system information when option -h is used
+    but --enable-ssh is disabled. Thanks to Guillaume Lelarge for the
+    report.
+  - Set daily rotation instead of hourly.
+  - Add pgcluu.service file to start/stop pgcluu_collectd with systemd
+    Thank to Arnaud Gaboury fot the file.
+  - Fix call to current_setting(checkpoint_segments) in dump_xlog_stat
+    It has been replaced by max_wal_size in PostgreSQL 9.5.
+  - Renamed option --notablespace by --no-tablespace.
+  - Split database menu in submenu per set of 10 databases.
+  - Remove border and shadow from all graphs.
+  - Set legend table outside the graph.
+  - Rewrite call to pgcluu_slide.js
+  - Reduce font size in legend and tooltip chart.
+  - Forgot to include uptime with PostgreSQL version in main page.
+  - Fix homepage statistics when data are loaded from cache file.
+  - Add subtitle in homepage panels.
+  - Fix number of connection in home page.
+  - Fix wrong count of database and tuples returned in overall stats.
+  - Fix report of bgwriter stats_reset.
+  - Make some changes in SysInfo view.
+  - Force default date before looking to working dir. Only look for
+    incremental repositiory with CGI.
+  - Replace flotr2 javascript chart library with jqplot.
+  - Add time navigation in pgcluu CGI
+  - Add a configuration file to CGI
+  - Update resources/ directory with new javascript libraries
+  - Remove temporary debug line.
+  - Add margin to panel buttons and center the graph. Thanks to Tomer
+    Steinfeld for the patches.
+  - Fix report of overcommit_memory.
+  - Add configuration file for CGI initialization.
+  - Fix two bugs on indexes report
+  - Add report about invalid index after concurrency build
+  - Fix report on most indexed tables
+  - Add report of tables without indexes and tables with more than 5
+    indexes. Thanks to julien Rouhaud for the feature request.
+  - Add statistics collect about number of indexes by table. Stats
+    are stored in pg_stat_count_indexes.csv
+  - Add postmaster start time. Thanks to Julie Rouhaud for the feature
+    request.
+  - Add system uptime information. Thanks to Julien Rouhaud for the
+    feature request.
+  - Add report of last statistics reset per database and report of
+    last autovacuum and autoanalyze. Thanks to Julien Rouhaud for the
+    feature request.
+  - Add report of bgwriter last statistics reset in Home/Cluster view
+    Thanks to Julien Rouhaud for the feature request.
+  - Add collect of invalid indexes.
+  - Fix pg 8.4 compatibility. Thanks to Julien Rouhaud for the patch.
+  - Check indisprimary instead of name starting by "pk", and also
+    exclude index supporting an exlucsion constraint. Thanks to Julien
+    Rouhaud for the patch.
+  - Fix colspan for pg_settings reports. Thanks to Julien Rouhaud for
+    the patch.
+  - Add a non default configuration settings report. Thanks to Julien
+    Rouhaud for the patch.
+  - Fix missing global title/description for connections and remove
+    call to normalize_line on index report. Thanks to Julien Rouhault
+    for the report.
+  - Display specific titles and description for overall graphs. Thanks
+    to Julien Rouhaud for the patch.
+  - Fix wrong call to pg_current_xlog_location() on secondary host.
+    Thanks to Julien Rouhaud for the report.
+  - Fix error when pgcluu is just used to parse a sar output file.
+    Thanks to Euler Taveira de Oliveira for the report.
+  - Fix wrong calculation of pg_stat_replication lag reports.
+  - Fix error: "Invalid offset: 0" when parsing pg_stat_replication
+    statistics. Thanks to vscherbo for the report.
+  - Fix regexp in previous commit to be more strict.
+  - Fix creation of wrong database menu using function name. Thanks
+    to spritchard for the report.
+  - Fix psql error when using --list-metric option. Thanks to Fabio
+    Pardi for the report.
+  - Fix wrong storage of previous value in pg_stat_user_functions
+    which result in counts on the database-functions page completely
+    wrong. Thanks to Steve Pritchard for the patch.
+  - Remove redundant regular expressions.
+  - Update CSS and JS files in resources directory and datetimepicker
+    ressources files for cgi.
+
+2015-07-25 - Version 2.4 released
+
+This release is a maintenance release that fix some issues. There's also some
+new interesting reports:
+
+  * Transfers per second (read/write/both) on all devices from sar -b
+  * Transfers per second for each device from sar -d .
+  * Number of tasks created per second
+  * Number of context switches per seconds.
+  * Improve pg_stat_statement report by adding all shared block stats
+    and read/write I/O timing per query when track_io_timing is enabled.
+  * Add device with highest tps on overall system information.
+
+and useful features:
+
+  * Add --capture mode to pgcluu_collectd to be be able to build a snapshot of
+    the PostgreSQL instance and exit. pgCluu will automatically adapt the report
+    to this capture mode. It will use a temporary directory /tmp/pgcluu_capture
+    to generate a tarball /tmp/pgcluu_capture.tar.gz containing the capture.
+  * Add pgCluu logo and ico to the html output.
+  * Add --charset option to be able to change the html charset, default: utf8.
+  * Allow regular expression in database list available in reports, for example:
+    with --db-only "p.*", only database beginning with p will be reported.
+  * Allow pgcluu to parse and compute statistics from gzip compressed files.
+  * pgcluu will not stop anymore if the sar file is not found, it will only
+    show a warning message and continue.
+
+This release also adds -r | --rotate-daily and -R | --rotate-hourly options to
+pgcluu_collectd be able to rotate statistic files on a daily or hourly basis.
+You can use -z or --compress option to compress rotated data files. Thanks to
+Euler Taveira de Oliveira for the feature request.
+
+There also some code relative to next coming major release that will be used
+to allow a full incremental mode and a temporal navigation into the collected
+statistics from a CGI program. This code enable caching (option -C or --cache)
+by dumping statistics stored in memory into binary files. With those files, data
+files can be removed (automatically with option -c or --clean) and report can
+be build later from them. This is not really useful now but this s the first
+stage to build incremental and cumulative reports.
+
+Here are the complete list of bug fixes in this release:
+
+  - Fix pretty print number format when units are blocks and not sizes.
+  - Do not apply database list restriction on total cluster size calculation.
+  - Fix Statistics about I/O on Indexes.
+  - Rewrite some parts of the overall system statistics for better performances.
+  - Fix bug in overall stat for Most read/written device, they was multiplied
+    by 512 (size of a block) twice.
+  - Fix system report of r/w and tps per devices.
+  - Fix wrong report of pg_buffercache statistics.
+  - Remove some global variables with local redeclaration.
+  - Fix use of uninitialized value during build of pg_stat_statement report.
+  - Fix Statements statistics not available because a local var is used during
+    computation. Thanks to Michel Meyer for the patch.
+  - Fix uninitialized value and wrong overall reports in Home menu. Thanks to
+    Assem Bayahi for the report.
+  - Remove garbage from last commit.
+  - Fix replication lag statistics report and add new report about
+    "Number of xlog data written per second."
+  - Fix documentation about --included-db
+  - Fix pgcluu_collectd crash when --no-database is used and the psql command
+    is not available. Thanks to Ronan Dunklau for the report.
+  - Fix call to cluster canceled queries statistics.
+  - Fix menu when no database are found.
+  - Fix start/end date and path to sar file in incremental and capture mode.
+  - Separate load of statistics from report builder.
+  - Make paths internally relative into output directory especially for
+    incremental facilities.
+  - Fix several issue that prevented configuration files to be copied into the
+    output directory.
+  - Allow white space in db's names. Thanks to Nicolas Thauvin for the report.
+  - Fix wrongly disabled temporary files menu.
+  - Fix database list with character - inside the name
+  - Fix replication and checkpoint report and corresponding menus disabled.
+    Thanks to Zsolt for the report.
+  - Fix a print on undefined value when a device is mounted after the first
+    execution of pgcluu. Thanks to Ezequiel Mina for the report.
+  - Add timezone option for perl localtime() and fix mixed formated tabs. Thanks
+    to David Cramblett for the patch.
+  - Add missing information into usage about -w | --password option.
+  - Fix for sar command when ssh not in use. Thanks to David Cramblett for the
+    patch.
+  - Make error message during first connection more explicit. Thanks to Gregoire
+    Pineau for the report.
+  - Be sure that interval is always != 0 to avoid illegal division by zero.
+    Thanks to Gregoire Pineau for the report.
+  - Fix control character in substitution regex.
+  - Fix error message for $OUTPUT_DIR not being empty should not use $INPUT_DIR.
+    Thanks to Matthew Musgrove for the patch.
+  - Fix limit reports to the database when --only-db is used. Thanks to Bianca
+    Santana Espichicoquez for the report.
+
+2015-02-06 - Version 2.3 released
+
+This release is a maintenance release that fix some issues. There's also a new
+report about "Role Settings" per database.
+
+    - Report default parameters values set with ALTER DATABASE and ALTER ROLE
+      in new menu item: "Database/Role Settings". Thanks to Thomas Reiss for
+      the feature request.
+    - Fix detection of disk device in sar file.
+    - Add boot value to the settings report
+    - Add Unit and Reset value in pg_settings report to highlight parameters
+      where values have been changes outside the configuration file.
+    - Fix handling of sysinfo information, and enhance .gitignore. Thanks to
+      Julien Rouhaud for the patch.
+    - Fix kernel.* and transparent_hugepage display on Sysinfo section. Thanks
+      to Julien Rouhaud for the patch.
+
+2015-01-05 - Version 2.2 released
+
+This release is a maintenance release that fix several issues. There's also a
+simple report of transparent_hugepage from the system and a menu enhancement
+by dividing the device menu per 10 items which is helpful when there's plenty
+of disk devices.
+
+	- Increase copyright year to 2015.
+	- Fix bug in database list extraction.
+	- Fix query to get missing foreign key indexes. Thanks to Ronan
+	  Dunklau for the patch.
+	- Add collect of transparent_hugepage information into sysinfo.txt file.
+	  (read from /sys/kernel/mm/transparent_hugepage/-)
+	- Fix overwriting of idle_in_xact for all database, should be idle.
+	  Thanks to Guillaume Lelarge for the patch.
+	- Fix query for missing indexes on FKs. The previous query reported
+	  every index that SHOULD exist for FKs, but was not filtering out the
+	  already existing ones. Thanks to Ronan Dunklau for the patch.
+	- Do not report redundant indexes when one is partial and not the other
+	  one. Thanks to Ronan Dunklau for the report.
+	- Fix statement to search redundant index by not reporting index that
+	  has uniqueness and not the other one. The statement now also reports
+	  duplicate indexes on the same column and not only composite indexes.
+	  Thanks to Ronan Dunklau for the report.
+	- Divide Devices menu by part of 10 devices. Useful when there is plenty
+	  of disk devices.
+	- Add --from-sa-file to allow parsing of sar output coming from a sa
+	  daily file.
+	- Fix call to local sar command and limit test on application_name for
+	  pg version >= 9.0. Thanks to Julien Rouhaud for the report.
+	- Set application_name to pgcluu before collecting data and exclude
+	  from pg_stat_activity queries generated by pgcluu.
+
+2014-09-25 - Version 2.1 released
+
+This release fix a lot of issue reported since six month and adds some
+improvments:
+
+Allow system information commands to be executed remotely
+Allow sar to be executed on a remote serveur using ssh connection.
+New options to pgcluu_collectd:
+    -M or --max-size option to allow an output dir size limit.
+    --no-database to avoid collecting statistics from a database.
+    -C count to terminate program after collecting data for X times.
+    -E or --end-after to terminate program after for some time.
+    -V or --version to show version information.
+
+New or enhanced reports/features:
+    Add report of connections waiting for a lock.
+    Add average duration time in statement report.
+    Add pg_stat_statements report.
+    Add pg_default and pg_global to tablespace size report.
+
+
+Other changes/fixes:
+
+	- Allow system information commands to be executed remotely. Thanks to
+	  Ahmad Iftekhar Rumman for the report.
+	- Add --no-database to avoid collecting statistics from a database.
+	  Useful if you just want to collect sar statistics.
+	- Fix query to collect information from pg_stat_activity that fail on
+	  postgres-xl and certainly postgres-xc. Thanks to xiao huan for the
+	  report.
+	- Fix pgcluu_collectd to stop capturing activity when option -C is
+	  omitted. Thanks to Thomas Reiss.
+	- Fix pg_settings query unit is available in >= 8.2 and boot and reset
+	  since 8.4. Thanks to Euler Taveira de Oliveira for the patch.
+	- Fix unopen filehandle in printing system disk device statistics.
+	  Thanks to Ahmad Iftekhar Rumman for the report.
+	- Cosmetic fixes in docs. Thanks to Euler Taveira de Oliveira for the
+	  patch.
+	- Documentation update with the new -C option to pgcluu_collectd.
+	- Terminate program after collecting data for X times. This is another
+	  option to end the program. Instead of doing some math with time
+	  counter, use a numeric counter. It can be combined with -i option too.
+	  Also, time (-E) has precedence over numeric (-C). Thanks to Euler
+	  Taveira de Oliveira for the patch.
+	- Add report of kernel nr_hugepages report, 9.4+ now support huge page
+	  supported. Thanks to Euler Taveira de Oliveira for the patch.
+	- Fix connection report enabled when a database has no connection.
+	  Thanks to Guillaume Lelarge for the report.
+	- Add configuration report of recovery.conf and postgresql.auto.conf.
+	  Thanks to Guillaume Lelarge and Julien Rouhaud for the report.
+	- Removed useless Type column in Indexes ans Tables size reports. Thanks
+	  to Guillaume Lelarge for the report.
+	- Disable Conflict and Canceled queries menus when this is not a standby
+	  server. Thanks to Guillaume Lelarge for the report.
+	- Fix some typo reported in issue #20. Thanks to Guillaume Lelarge for
+	  the report.
+	- Change Returned and Fetched legend to Table (returned) and Index
+	  (fetched). Thanks to Guillaume Lelarge for the report.
+	- Fix keep tick formatting when zooming. Thanks to Julien Rouhaud for
+	  the patch.
+	- Fix non exclusion of devices in System Network and Devices submenu.
+	  Thanks to Thomas Reiss for the report.
+	- Fix some error uninitialized value in concatenation.
+	- Allow pgbouncer statistics collect+report only. Thanks to Eric
+	  Veldhuyzen for the report.
+	- Add boot_val and reset_val to pg_settings output.
+	- Fix multiline in df system information. Thanks to Nicolas Thauvin
+	  for the report.
+	- Add -M or --max-size option to allow an output dir size limit. For
+	  example using -M 100MB will interrupt pgcluu_collectd when output dir
+	  will reach this size. Require the du system command. Thanks to Nicolas
+	  Thauvin for the feature request.
+	- Add new option -E or --end-after to tell pgcluu_collectd to run for
+	  some time before terminating automatically. Thanks to Nicolas Thauvin
+	  for the feature resquest.
+	- Fix issue with pg_stat_statements metrics when the extension was not
+	  installed in a schema searchable in the search_path connected user
+	  value. Thanks to Nicolas Thauvin for the report.
+	- Failure on null value on replication report when pg_basebackup was
+	  running. Thanks to Emmanuel Vinet for the report.
+	- Add/fix report of connections waiting for a lock. Thanks to Guillaume
+	  Lelarge for the report.
+	- Replace label Waiting and Waiting in xact by Idle and Idle in xact in
+	  connection graph. Thanks to Guillaume Lelarge for the report.
+	- Fix metrics that was not accepted if passed alone: pg_settings,
+	  lock_granted,lock_modes,lock_types. Thanks to Fabio Pardi for the
+	  report.
+	- Add information about -v|--verbose and -V|--version to documentation.
+	- Add -V | --version option. Thanks to Fabio Pardi for the feature
+	  request.
+	- Fix several issues in disabling menu in cluster reports.
+	- Fix temporary statistics report, menu was always disabled. Thanks to
+	  Julien Rouhaud for the report.
+	- Fix wring number of CPU sockets that was reporting the total number
+	  of cores. Thanks to Thomas Reiss for the report.
+	- Add collect of the extensions version. Thanks to Jehan-Guillaume de
+	  Rorthais for the request.
+	- Add support to individual reports when the --metrics option have been
+	  used with pgcluu_collectd.
+	- Fix some uninitialized variables and errors when pgcluu has only some
+	  metrics to parse.
+	- It will not search for pg_database_size.csv anymore to contruct the
+	  list of database and read pgbouncer file to get list of database with
+	  pgbouncer.
+	- Generation of database related reports (cluster, database, pgbouncer)
+	  have been review to use non global filehandle. It will not search for
+	  pg_database_size.csv anymore to contruct the list of database and
+	  prevent case where some reports was genereted twice.
+	- Speed improvement.
+	- Rename --os-info option into --sysinfo and add --no-sysinfo option to
+	  completly disable the generation of sysinfo.txt
+	- Fix --metrics option that was not limiting the kind of metrics to use.
+	  Thanks to Fabio Pardi for the report.
+	- Fix bug in device lookup in sar file that was generating undefined
+	  filehandle. Thanks to Toth Csaba for the help
+	- Fix several part where pgcluu crash using undefined variable if the
+	  database in not found in pg_database_size.csv.
+	- Fix error print on an undefined value when a database does not have
+	  lock defined. Thanks to Csaba Toth for the report.
+	- Fix typo in System memory utilization report description.
+	- Fix typo in Commits/Rollbacks report description.
+	- Fix typo in Read Tuples report description.
+	- Fix typo in locks per type report description.
+	- Fix typo in Statistics about cache utilisation per relation.
+	- Change description of Replication lag report.
+	- Add sorttable.js to resources directory.
+	- Fix position of index.html#home.
+	- Fix parsing of --db-only, --dev-only ... comma separated list.
+	- Fix typo in ssh related option. Thanks to Jehan-Guillaume de Rorthais
+	  for the report.
+	- Fix code to set ssh command and allow collect of configuration files
+	  through ssh.
+	- Allow sar to be executed on a remote serveur using ssh connection.
+	  Add --enable-ssh to activate this feature, the remote host is defined
+	  using -h option. There is several new options --ssh-* to be able to
+	  take full control of the ssh connection.
+	- Add average duration time in statement report.
+	- Add pg_stat_statements report.
+	- Override statements statistics on each loop.
+	- Replace multiple space by single one in pg_stat_statements queries.
+	- Fix pg_stat_statements collect to replace semi-colon by SEMICOLON
+	  keyword to prevent breaking CSV format.
+	- Add pg_default and pg_global to tablespace size report. Fix issue on
+	  spclocation display on per tablespace reports.
+
+2014-03-22 - Version 2.0 released
+
+This major release adds more than twenty new reports. pgCluu now reports
+everything you want to know about your PostgreSQL server from a cluster,
+database, or operating system point of view. It is also able to collect
+statistics about pgBouncer, shared buffer utilization using pg_buffercache,
+most frequent and time consuming queries with pg_stat_statements and really
+much more, see full list bellow. 
+
+New or enhanced reports/features:
+
+	- Allow pgcluu_collected to collect sar and configuration files
+	  remotely together with PostgreSQL statistics using a ssh connection.
+	  That mean that pgCluu is fully able to audit a remote server.
+	- Add pg_stat_statements report showing most frequent and time
+	  consuming queries.
+	- Add reports for unused and redundant indexes per database.
+	- Add report about archiver statistics with PostgreSQL 9.4 new
+	  pg_stat_archiver view.
+	- Add report about wal files created vs recycled and the max number
+	  of wal files.
+	- Add reports about network interfaces utilization and network errors.
+	- Add reports about system cache page in/out from/to disk.
+	- Add report of isdirty statistics.
+	- Add --exclude-time to pgcluu_collectd options to stop collecting
+	  statistics during a period of time. Ex: --exclude-time "22:00-06:00"
+	  to stop collecting data from 22:00 to 06:00 am the next day.
+	- Add report about percentage of shared buffer used per database
+	- Add report about percentage of each databases loaded in shared buffer
+	- Add report about usagecount distribution in shared buffer
+	- Add report about usagecount distribution in dirty shared buffer
+	- Add report of number of shared buffer/pages used by a relation
+	- Add report number of buffers loaded in cache for a relation relation
+	  and the percentage of the relation loaded (1).
+	- Add reports about configuration files (postgresql.conf, pg_hba.conf and
+	  pg_ident.conf), pgcluu_collectd must be run as postgresql user.
+	- Add report of user functions statistics.
+	- Add report about the pgbouncer settings in Configuration submenu.
+	- Add copy of pgbouncer.ini file in Configuration submenu.
+	- Add report of pg_settings in Configuration submenu..
+	- Add report with SQL orders to create missing indexes on foreign keys.
+	- Allow HTML table sort with a modified version of the javascript library
+	  sorttable.js
+	- Moved System info report from sar sytem menu to a dedicated main SysInfo
+	  menu.
+	- Add the number and list of extensions used inside the PG cluster.
+	- Add reports about Locks per types, Locks per modes and Locks granted or not.
+	- Add report about I/O statistics per index.
+	- Add report about I/O statistics per table.
+	- Add last manual vacuum/analyze datatime on database info report.
+	- Add per database index statistics.
+	- Add report of size and number of tuples per table of a database.
+	- Add statistics reports per table (idx_scan/seq_scan, vacuums/analyzes,
+	  Insert/update/delete/hot update and live/dead tuples).
+	- Add count of user triggers in database information slide.
+	- Add Database info submenu per database to display the general information
+	  about a database (installed extension, schemas, number of Stored procedures
+	  and of all kind of object.
+	- Add last know size of the database in the Database info slide.
+	- Add total number of databases on cluster key values.
+	- Add report of tablespaces utilization.
+	- Add report of pgbouncer statistics per dbname and per pool (dbname/username).
+
+
+(1) [Shared buffers statistics are collected automatically when pg_buffercache
+     extension is installed and the -B | --enable-buffercache option is used.]
+
+
+Other changes/fixes:
+
+	- Allow sar to be executed on a remote server using ssh connection.
+	  Add --enable-ssh to activate this feature, the remote host is defined
+	  using -h option. There is several new options --ssh-* to be able to
+	  take full control of the ssh connection.
+        - Waiting interval is now calculated with the interval value minus the
+	  execution time of each loop.
+	- Add output information when a kill signal is sent to pgcluu_collectd.
+	- Option -p | --dev-only have change to -D | --device-only and add new
+	  option -N | --network-only to limit report on some network interfaces.
+	- Pretty print system memory information.
+	- Fix graphs when a new database is created or dropped during an audit.
+	- Add -B | --enable-buffercache to activate pg_buffercache statistics.
+	  It is disable by default.
+	- Reorder Database menu with submenu and prevent moving to non existent
+	  reports by disabling the submenu.
+	- Reorder cluster menu, using submenu and fix title of replication lag
+	  report.
+	- Add vm.dirty_background_bytes and vm.dirty_bytes to sysctl collect.
+	- Add support to PostgreSQL 8.1 by using temporary table not COPY (sql).
+	  Thanks to kenstir for the patch.
+	- Reopen stdin/out/err so that daemon mode works correctly. Thanks to
+	  kenstir for the patch.
+	- Fix affected tuples per operation per database where tuples fetched
+	  was used as select instead of tuples returned.
+	- Review code and use one method per report.
+	- Update documentation and usage about --exclude-time
+	- Fix detection of non official release, like devel or EnterpriseDB
+	  major version detection.
+	- Change icon of CPU in SysInfo report.
+	- Remove full path from sar and psql command to allow definition by
+	  environment variables.
+	- Fix CPU report refresh when comming from a report in the same
+	  system.html page.
+	- Change label of the 'Reset' button to 'To chart' to be less confusing.
+	  This button allow to switch from image to chart (opposite as 'To image')
+	  and not to reset a zoom in the graph.
+	- Add -n, --top-number command line option to redefine the default top
+	  10 tables or indexes I/O statistics.
+	- Fix interval given to the sar command, should be one second and not
+	  the value of $INTERVAL.
+	- Fix sar report with overlapped time.
+	- Fix empty file pg_stat_user_tables.csv.
+	- Add database name inside pg_class_size.csv output and add function
+	  get_proc_count(dbname) to retrieve function from a given database.
+	- Add -T | --notablespace option to avoid printing an error message
+	  when the connection user is not superuser.
+	- Remove pg_default and pg_global from tablespace report.
+	- Change link on program name to pgcluu www site.
+	- Move print of Postgresql full version at bottom of the home page.
+	- Reduce font size of key value on home and information slides.
+	- Update Flotr2 javascript library to fix redraw of crosshair.
+	- Command line options that can be used multiple time can now also
+	  be used one time using a comma separated list of object names.
+
+2014-01-28 - Version 1.1 released
+
+This release adds lot of report improvements and bug fixes. There is also
+several new features or reports.
+
+	- Format mouse tracker on graphs to show all dataset values at a time.
+	- Add run queue length report to system menu.
+	- Add checkpoint write and sync times reports.
+	- Add report of PostgreSQL version
+	- Split background writer buffer and count statistics into separated
+	  reports.
+	- Add report of maxwritten_clean into bgwriter reports.
+	- Add report of kernel parameters to the system info page.
+	- Add collect of system kernel tuning parameters.
+	- Remove embedded CSS and javascript on each HTML page, resources are
+	  now automatically copied into the output directory if not already
+	  present. Thanks to Guillaume Lelarge for the suggestion.
+	- Allow pgcluu to parse sar file generated from sa file, use commands
+	  like "sar -A -p -f /var/log/sysstat/sa*". Thanks to Julien Rouhaud
+	  for the feature request.
+	- Split commit, rollback and backend graph by using a second yaxis for
+	  backend. Thanks to GUillaume Lelarge for the report.
+	- Add System Information report.
+	- Move Cache hit/miss ratio on second yaxis and change dataset colors.
+	  Thanks to Guillaume Lelarge for the report.
+	- Add collect of OS release information.
+	- Allow pgcluu_collectd to grab OS information (cpu, memory, etc.) and
+	  add --os-info option to only grab that information (for testing).
+	- Reformat dashboard information.
+	- Add -z | --timezone to set the hour(s) from GMT time to adjust times
+	  on sar report. Thanks to Bricklen for the feature request.
+
+and some more changes/fixes:
+
+	- Add vertical crosshair on graph.
+	- Update copyright date to 2014
+	- Disable database report of number of canceled queries when not on
+	  hot standby node.
+	- Disable checkpoint write report following the pg version (< 9.2).
+	- Disable temporary files and deadlocks reports following the postgresql
+	  version (< 9.2).
+	- Add storage of pg version into sysinfo.txt
+	- Fix missing legend of checkpoints_timed in checkpoint report.
+	- Fix warning on META_MERGE for ExtUtils::MakeMaker < 6.46. Thanks to
+	  Julien Rouhaud for the patch.
+	- Fix typo in pgcluu_collectd calls. Thanks to Jacky Rigoreau for the
+	  report.
+	- Fix issue where information slide was not displayed when clicking on
+	  the information button.
+	- Change documentation about resources files that are now autogenerated.
+	- Fix grab of statistics from an 8.4 cluster (access to not-available-yet
+	  statistics catalogs). Thanks to Guillaume Lelarge for the report.
+	- Fix issue on parsing CentOs release. Thanks to bricklen for the help.
+	- Fix issue "Use of uninitialized value $val in substitution line 3312".
+	  Thanks to bricklen for the report.
+	- Fix call method "print" on an undefined value at ./pgcluu line 1303.
+	  Thanks to Guillaume Lelarge for the report.
+	- Fix sar dashboard report.
+	- Remove decimal from hit cache ratio report. Thanks to Guillaume Lelarge
+	  for the report.
+	- Dashboard review: cluster label rewrite, remove empty values from
+	  report, add start/end date of database stats and sar stats. Thanks to
+	  Guillaume Lelarge for the feature/change requests.
+	- Fix some warning on uninitialized value on dashboard. Thanks to Julien
+	  Rouhaud for the report.
+	- Fix Illegal division by zero at ./pgcluu line 1132. Thanks to Julien
+	  Rouhaud for the report.
+	- Fix issue in building timestamps in sar data. Thanks to Bricklen for
+	  the report.
+	- Fix sysstat version execution error with locale different to C or en_*.
+	  Thanks to forall for the report.
+	- Fix broken sar charts when collect time is greater than 24 hours.
+	- Add -z | --timezone option to documentation.
+	- Fix error: print() on closed filehandle GEN9 at pgcluu line 1942.
+	  Thanks to Bricklen for the report.
+
+
+2013-11-18 - Version 1.0 released
+
+This is the first public release of pgCluu, that is a packaging of the tools I
+use every day to collect statistics and build reports of PostgreSQL Clusters
+for performances auditing and troubleshooting.
+
+At this time it collect and report most of what is helpful for a PostgreSQL
+Cluster performance auditing. There's lot of others reports to be included:
+
+	- Statistics reports concerning tables.
+	- Statistics reports about pg_stat_statement.
+	- More Sar statistiques reports.
+	- ...
+
+This will comes in next release. 
+
+The goal of this project is to provide a complete PostgreSQL auditing tool that
+do not need any dependency so that it can be run on any server.
+
+If you just have a sar output file, pgCluu can be use to draw graphs about the
+system utilization only.
+
+For more information take a look at http://pgcluu.darold.net/
+
+
